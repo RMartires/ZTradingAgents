@@ -195,7 +195,8 @@ class TradingAgentsGraph:
         init_agent_state = self.propagator.create_initial_state(
             company_name, trade_date
         )
-        args = self.propagator.get_graph_args()
+        # Pass callbacks through to LangGraph so tool execution is observable.
+        args = self.propagator.get_graph_args(callbacks=self.callbacks or None)
 
         if self.debug:
             # Debug mode with tracing

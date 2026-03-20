@@ -1,5 +1,7 @@
 typing-extensions
+langchain>=0.3.17,<0.4
 langchain-core
+langfuse
 langchain-openai
 langchain-experimental
 pandas

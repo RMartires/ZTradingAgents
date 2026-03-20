@@ -130,6 +130,34 @@ export OPENROUTER_API_KEY=...      # OpenRouter
 export ALPHA_VANTAGE_API_KEY=...   # Alpha Vantage
 ```
 
+### Observability (Optional: Langfuse)
+
+TradingAgents can emit Langfuse traces for LLM calls and tool execution via LangChain callbacks.
+
+The `langchain` package is required for Langfuse’s `CallbackHandler` (per-LLM spans under the root trace). It is listed in `pyproject.toml`; if you use `pip install -r requirements.txt`, `langchain` and `langfuse` are included.
+
+To enable tracing, set:
+
+```bash
+export LANGFUSE_ENABLED=true
+export LANGFUSE_PUBLIC_KEY=...
+export LANGFUSE_SECRET_KEY=...
+
+# Optional (self-hosted or region-specific)
+export LANGFUSE_BASE_URL="https://cloud.langfuse.com"
+
+# Optional: a stable user identifier to group usage in Langfuse
+export LANGFUSE_USER_ID="user-123"
+```
+
+When enabled, each CLI analysis run and each `TradingAgentsGraph.propagate(...)` call creates a root trace named `TradingAgents analysis`. Traces are grouped using `session_id = "<TICKER>:<TRADE_DATE>:<run_suffix>"` where `run_suffix` is random per run (so repeated runs on the same ticker/date do not collide). The same suffix is used to derive a correlated Langfuse trace id. A tag `run:<run_suffix>` is also set for quick filtering.
+
+Validation checklist:
+- Open the Langfuse Trace Table and filter by `session_id` or by tag `run:`.
+- You should see exactly one root trace per run (root observation name: `TradingAgents analysis`).
+- The root trace should include tags like `ticker:<TICKER>`, `trade_date:<TRADE_DATE>`, and `llm_provider:<provider>`.
+- Inside the trace, Langfuse should show LLM generations and tool calls captured via the LangChain callback handler.
+
 For local models, configure Ollama with `llm_provider: "ollama"` in your config.
 
 Alternatively, copy `.env.example` to `.env` and fill in your keys:

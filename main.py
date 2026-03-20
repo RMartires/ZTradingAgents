@@ -3,6 +3,13 @@ from pathlib import Path
 
 from tradingagents.graph.trading_graph import TradingAgentsGraph
 from tradingagents.default_config import DEFAULT_CONFIG
+from cli.stats_handler import StatsCallbackHandler
+from tradingagents.observability.langfuse_config import (
+    get_langfuse_client,
+    get_langfuse_handler,
+    new_langfuse_run_correlation,
+    shutdown_langfuse,
+)
 
 
 def _load_dotenv(path: str | None = None) -> None:
@@ -43,14 +50,77 @@ config["data_vendors"] = {
     "news_data": "yfinance",
 }
 
-# Initialize with custom config
-ta = TradingAgentsGraph(debug=True, config=config)
+# Create stats callback handler for tracking LLM/tool calls
+stats_handler = StatsCallbackHandler()
 
-# forward propagate (hard-coded ticker + as-of date for now)
+langfuse_client = get_langfuse_client()
+langfuse_handler = None
+root_span = None
+trace_cm = None
+propagate_cm = None
+
 TICKER = "NVDA"
 TRADE_DATE = "2024-05-10"
+
+if langfuse_client is not None:
+    from langfuse import propagate_attributes
+
+    corr = new_langfuse_run_correlation(ticker=TICKER, trade_date=TRADE_DATE)
+    trace_kwargs = dict(
+        as_type="span",
+        name="TradingAgents analysis",
+        input={
+            "company_name": TICKER,
+            "trade_date": TRADE_DATE,
+            "llm_provider": config.get("llm_provider"),
+            "quick_think_llm": config.get("quick_think_llm"),
+            "deep_think_llm": config.get("deep_think_llm"),
+        },
+    )
+    tc = corr.trace_context
+    if tc is not None:
+        trace_kwargs["trace_context"] = tc
+
+    trace_cm = langfuse_client.start_as_current_observation(**trace_kwargs)
+    root_span = trace_cm.__enter__()
+    tags = [
+        f"ticker:{TICKER}",
+        f"trade_date:{TRADE_DATE}",
+        f"run:{corr.run_suffix}",
+        f"llm_provider:{config.get('llm_provider')}",
+        f"quick_model:{config.get('quick_think_llm')}",
+        f"deep_model:{config.get('deep_think_llm')}",
+    ]
+    propagate_cm = propagate_attributes(
+        session_id=corr.session_id,
+        user_id=os.getenv("LANGFUSE_USER_ID"),
+        tags=tags,
+    )
+    propagate_cm.__enter__()
+
+    langfuse_handler = get_langfuse_handler()
+
+callbacks = [stats_handler]
+if langfuse_handler is not None:
+    callbacks.append(langfuse_handler)
+
+# Initialize with custom config
+ta = TradingAgentsGraph(debug=True, config=config, callbacks=callbacks)
+
+# forward propagate (hard-coded ticker + as-of date for now)
 _, decision = ta.propagate(TICKER, TRADE_DATE)
 print(decision)
 
 # Memorize mistakes and reflect
 # ta.reflect_and_remember(1000) # parameter is the position returns
+
+if langfuse_client is not None:
+    try:
+        if root_span is not None:
+            root_span.update(output={"processed_signal": str(decision)[:200]})
+    finally:
+        if propagate_cm is not None:
+            propagate_cm.__exit__(None, None, None)
+        if trace_cm is not None:
+            trace_cm.__exit__(None, None, None)
+        shutdown_langfuse()

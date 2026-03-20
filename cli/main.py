@@ -1,4 +1,5 @@
 from typing import Optional
+import os
 import datetime
 import typer
 from pathlib import Path
@@ -25,6 +26,12 @@ from rich.rule import Rule
 
 from tradingagents.graph.trading_graph import TradingAgentsGraph
 from tradingagents.default_config import DEFAULT_CONFIG
+from tradingagents.observability.langfuse_config import (
+    get_langfuse_client,
+    get_langfuse_handler,
+    new_langfuse_run_correlation,
+    shutdown_langfuse,
+)
 from cli.models import AnalystType
 from cli.utils import *
 from cli.announcements import fetch_announcements, display_announcements
@@ -919,12 +926,71 @@ def run_analysis():
     selected_set = {analyst.value for analyst in selections["analysts"]}
     selected_analyst_keys = [a for a in ANALYST_ORDER if a in selected_set]
 
+    # Optional Langfuse integration (Phase 1 + Phase 2)
+    # If Langfuse is disabled or keys are missing, this behaves as before.
+    langfuse_client = get_langfuse_client()
+    langfuse_handler = None
+    callbacks = [stats_handler]
+    tool_callbacks = [stats_handler]
+    root_span = None
+    trace_cm = None
+    propagate_cm = None
+
+    if langfuse_client is not None:
+        from langfuse import propagate_attributes
+
+        corr = new_langfuse_run_correlation(
+            ticker=selections["ticker"],
+            trade_date=selections["analysis_date"],
+        )
+        user_id = os.getenv("LANGFUSE_USER_ID")
+        tags = [
+            f"ticker:{selections['ticker']}",
+            f"trade_date:{selections['analysis_date']}",
+            f"run:{corr.run_suffix}",
+            f"llm_provider:{config.get('llm_provider')}",
+            f"quick_model:{config.get('quick_think_llm')}",
+            f"deep_model:{config.get('deep_think_llm')}",
+        ]
+
+        trace_input = {
+            "company_name": selections["ticker"],
+            "trade_date": selections["analysis_date"],
+            "analysts": [a.value for a in selections["analysts"]],
+            "llm_provider": config.get("llm_provider"),
+            "quick_think_llm": config.get("quick_think_llm"),
+            "deep_think_llm": config.get("deep_think_llm"),
+        }
+
+        trace_kwargs = dict(
+            as_type="span",
+            name="TradingAgents analysis",
+            input=trace_input,
+        )
+        tc = corr.trace_context
+        if tc is not None:
+            trace_kwargs["trace_context"] = tc
+
+        trace_cm = langfuse_client.start_as_current_observation(**trace_kwargs)
+        root_span = trace_cm.__enter__()
+        propagate_cm = propagate_attributes(
+            session_id=corr.session_id,
+            user_id=user_id,
+            tags=tags,
+        )
+        propagate_cm.__enter__()
+
+        langfuse_handler = get_langfuse_handler()
+        if langfuse_handler is not None:
+            callbacks.append(langfuse_handler)
+            tool_callbacks.append(langfuse_handler)
+
     # Initialize the graph with callbacks bound to LLMs
     graph = TradingAgentsGraph(
         selected_analyst_keys,
         config=config,
         debug=True,
-        callbacks=[stats_handler],
+        callbacks=callbacks,
     )
 
     # Initialize message buffer with selected analysts
@@ -1015,7 +1081,7 @@ def run_analysis():
         )
         # Pass callbacks to graph config for tool execution tracking
         # (LLM tracking is handled separately via LLM constructor)
-        args = graph.propagator.get_graph_args(callbacks=[stats_handler])
+        args = graph.propagator.get_graph_args(callbacks=tool_callbacks)
 
         # Stream the analysis
         trace = []
@@ -1140,6 +1206,27 @@ def run_analysis():
                 message_buffer.update_report_section(section, final_state[section])
 
         update_display(layout, stats_handler=stats_handler, start_time=start_time)
+
+    # Close the Langfuse root trace and ensure events are flushed.
+    if langfuse_client is not None:
+        try:
+            if root_span is not None:
+                final_decision = final_state.get("final_trade_decision", "")
+                final_decision_str = str(final_decision)[:500] if final_decision else ""
+                root_span.update(
+                    output={
+                        "final_trade_decision": final_decision_str,
+                        "processed_signal": str(decision)[:200] if decision else "",
+                    }
+                )
+        finally:
+            try:
+                if propagate_cm is not None:
+                    propagate_cm.__exit__(None, None, None)
+            finally:
+                if trace_cm is not None:
+                    trace_cm.__exit__(None, None, None)
+                shutdown_langfuse()
 
     # Post-analysis prompts (outside Live context for clean interaction)
     console.print("\n[bold cyan]Analysis Complete![/bold cyan]\n")
