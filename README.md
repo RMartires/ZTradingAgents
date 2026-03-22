@@ -150,11 +150,11 @@ export LANGFUSE_BASE_URL="https://cloud.langfuse.com"
 export LANGFUSE_USER_ID="user-123"
 ```
 
-When enabled, each CLI analysis run and each `TradingAgentsGraph.propagate(...)` call creates a root trace named `TradingAgents analysis`. Traces are grouped using `session_id = "<TICKER>:<TRADE_DATE>:<run_suffix>"` where `run_suffix` is random per run (so repeated runs on the same ticker/date do not collide). The same suffix is used to derive a correlated Langfuse trace id. A tag `run:<run_suffix>` is also set for quick filtering.
+When enabled, each CLI analysis run and each `TradingAgentsGraph.propagate(...)` call creates a root trace whose name is `TradingAgents analysis [<run_suffix>]` (same random `run_suffix` as below). Traces are grouped using `session_id = "<TICKER>:<TRADE_DATE>:<run_suffix>"` where `run_suffix` is random per run (so repeated runs on the same ticker/date do not collide). The same suffix is used to derive a correlated Langfuse trace id. A tag `run:<run_suffix>` is also set for quick filtering.
 
 Validation checklist:
 - Open the Langfuse Trace Table and filter by `session_id` or by tag `run:`.
-- You should see exactly one root trace per run (root observation name: `TradingAgents analysis`).
+- You should see exactly one root trace per run (name includes the per-run suffix, e.g. `TradingAgents analysis [a1b2c3d4]`).
 - The root trace should include tags like `ticker:<TICKER>`, `trade_date:<TRADE_DATE>`, and `llm_provider:<provider>`.
 - Inside the trace, Langfuse should show LLM generations and tool calls captured via the LangChain callback handler.
 

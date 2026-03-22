@@ -29,6 +29,7 @@ from tradingagents.default_config import DEFAULT_CONFIG
 from tradingagents.observability.langfuse_config import (
     get_langfuse_client,
     get_langfuse_handler,
+    langfuse_trace_display_name,
     new_langfuse_run_correlation,
     shutdown_langfuse,
 )
@@ -943,6 +944,7 @@ def run_analysis():
             ticker=selections["ticker"],
             trade_date=selections["analysis_date"],
         )
+        trace_display_name = langfuse_trace_display_name(corr.run_suffix)
         user_id = os.getenv("LANGFUSE_USER_ID")
         tags = [
             f"ticker:{selections['ticker']}",
@@ -964,7 +966,7 @@ def run_analysis():
 
         trace_kwargs = dict(
             as_type="span",
-            name="TradingAgents analysis",
+            name=trace_display_name,
             input=trace_input,
         )
         tc = corr.trace_context
@@ -974,6 +976,7 @@ def run_analysis():
         trace_cm = langfuse_client.start_as_current_observation(**trace_kwargs)
         root_span = trace_cm.__enter__()
         propagate_cm = propagate_attributes(
+            trace_name=trace_display_name,
             session_id=corr.session_id,
             user_id=user_id,
             tags=tags,
@@ -1213,12 +1216,12 @@ def run_analysis():
             if root_span is not None:
                 final_decision = final_state.get("final_trade_decision", "")
                 final_decision_str = str(final_decision)[:500] if final_decision else ""
-                root_span.update(
-                    output={
-                        "final_trade_decision": final_decision_str,
-                        "processed_signal": str(decision)[:200] if decision else "",
-                    }
-                )
+                out = {
+                    "final_trade_decision": final_decision_str,
+                    "processed_signal": str(decision)[:200] if decision else "",
+                }
+                root_span.set_trace_io(input=trace_input, output=out)
+                root_span.update(output=out)
         finally:
             try:
                 if propagate_cm is not None:

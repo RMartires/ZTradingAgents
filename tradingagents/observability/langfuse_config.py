@@ -8,6 +8,14 @@ from typing import Any, Dict, Optional, Sequence
 
 logger = logging.getLogger(__name__)
 
+# Base label; per-run display name includes run_suffix (see langfuse_trace_display_name).
+LANGFUSE_TRACE_BASE_NAME = "TradingAgents analysis"
+
+
+def langfuse_trace_display_name(run_suffix: str) -> str:
+    """Unique trace/observation name per run (matches tag run:<run_suffix>)."""
+    return f"{LANGFUSE_TRACE_BASE_NAME} [{run_suffix}]"
+
 
 @dataclass(frozen=True)
 class LangfuseRunCorrelation:

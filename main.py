@@ -7,6 +7,7 @@ from cli.stats_handler import StatsCallbackHandler
 from tradingagents.observability.langfuse_config import (
     get_langfuse_client,
     get_langfuse_handler,
+    langfuse_trace_display_name,
     new_langfuse_run_correlation,
     shutdown_langfuse,
 )
@@ -66,16 +67,18 @@ if langfuse_client is not None:
     from langfuse import propagate_attributes
 
     corr = new_langfuse_run_correlation(ticker=TICKER, trade_date=TRADE_DATE)
+    trace_display_name = langfuse_trace_display_name(corr.run_suffix)
+    trace_input = {
+        "company_name": TICKER,
+        "trade_date": TRADE_DATE,
+        "llm_provider": config.get("llm_provider"),
+        "quick_think_llm": config.get("quick_think_llm"),
+        "deep_think_llm": config.get("deep_think_llm"),
+    }
     trace_kwargs = dict(
         as_type="span",
-        name="TradingAgents analysis",
-        input={
-            "company_name": TICKER,
-            "trade_date": TRADE_DATE,
-            "llm_provider": config.get("llm_provider"),
-            "quick_think_llm": config.get("quick_think_llm"),
-            "deep_think_llm": config.get("deep_think_llm"),
-        },
+        name=trace_display_name,
+        input=trace_input,
     )
     tc = corr.trace_context
     if tc is not None:
@@ -92,6 +95,7 @@ if langfuse_client is not None:
         f"deep_model:{config.get('deep_think_llm')}",
     ]
     propagate_cm = propagate_attributes(
+        trace_name=trace_display_name,
         session_id=corr.session_id,
         user_id=os.getenv("LANGFUSE_USER_ID"),
         tags=tags,
@@ -117,7 +121,9 @@ print(decision)
 if langfuse_client is not None:
     try:
         if root_span is not None:
-            root_span.update(output={"processed_signal": str(decision)[:200]})
+            out = {"processed_signal": str(decision)[:200]}
+            root_span.set_trace_io(input=trace_input, output=out)
+            root_span.update(output=out)
     finally:
         if propagate_cm is not None:
             propagate_cm.__exit__(None, None, None)
