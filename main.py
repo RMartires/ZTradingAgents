@@ -1,3 +1,4 @@
+import logging
 import os
 from pathlib import Path
 
@@ -36,6 +37,11 @@ def _load_dotenv(path: str | None = None) -> None:
 # Load environment variables from .env (needs OPENROUTER_API_KEY for OpenRouter)
 _load_dotenv()
 
+_level_name = os.getenv("LOG_LEVEL", "WARNING").upper()
+_level = getattr(logging, _level_name, logging.WARNING)
+if not logging.getLogger().handlers:
+    logging.basicConfig(level=_level, format="%(levelname)s %(name)s: %(message)s")
+
 # Create a custom config
 config = DEFAULT_CONFIG.copy()
 config["llm_provider"] = os.getenv("LLM_PROVIDER", "openrouter")
@@ -45,8 +51,8 @@ config["max_debate_rounds"] = 1
 
 # Configure data vendors (default uses yfinance, no extra API keys needed)
 config["data_vendors"] = {
-    "core_stock_apis": "yfinance",
-    "technical_indicators": "yfinance",
+    "core_stock_apis": "kite",
+    "technical_indicators": "kite",
     "fundamental_data": "yfinance",
     "news_data": "yfinance",
 }
@@ -60,7 +66,7 @@ root_span = None
 trace_cm = None
 propagate_cm = None
 
-TICKER = "NVDA"
+TICKER = "RELIANCE"
 TRADE_DATE = "2024-05-10"
 
 if langfuse_client is not None:

@@ -10,6 +10,7 @@ def create_fundamentals_analyst(llm):
         current_date = state["trade_date"]
         ticker = state["company_of_interest"]
         company_name = state["company_of_interest"]
+        portfolio_context = state.get("portfolio_context", "").strip()
 
         tools = [
             get_fundamentals,
@@ -23,6 +24,13 @@ def create_fundamentals_analyst(llm):
             + " Make sure to append a Markdown table at the end of the report to organize key points in the report, organized and easy to read."
             + " Use the available tools: `get_fundamentals` for comprehensive company analysis, `get_balance_sheet`, `get_cashflow`, and `get_income_statement` for specific financial statements.",
         )
+
+        if portfolio_context:
+            system_message = (
+                system_message
+                + "\n\nCurrent Portfolio Context (holdings/positions/funds):\n"
+                + portfolio_context
+            )
 
         prompt = ChatPromptTemplate.from_messages(
             [

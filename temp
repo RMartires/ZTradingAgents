@@ -1,1 +1,3 @@
 python main.py 2>&1 | tee "run-$(date +%Y%m%d-%H%M%S).log"
+
+python scripts/kite_token_server.py // auth server

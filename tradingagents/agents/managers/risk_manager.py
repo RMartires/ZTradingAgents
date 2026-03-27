@@ -6,6 +6,12 @@ def create_risk_manager(llm, memory):
     def risk_manager_node(state) -> dict:
 
         company_name = state["company_of_interest"]
+        portfolio_context = state.get("portfolio_context", "").strip()
+        portfolio_section = (
+            f"Portfolio Context (holdings/positions/funds):\n{portfolio_context}"
+            if portfolio_context
+            else ""
+        )
 
         history = state["risk_debate_state"]["history"]
         risk_debate_state = state["risk_debate_state"]
@@ -40,6 +46,8 @@ Deliverables:
 {history}
 
 ---
+
+{portfolio_section}
 
 Focus on actionable insights and continuous improvement. Build on past lessons, critically evaluate all perspectives, and ensure each decision advances better outcomes."""
 

@@ -1,5 +1,7 @@
 from typing import Annotated
 
+import logging
+
 # Import from vendor-specific modules
 from .y_finance import (
     get_YFin_data_online,
@@ -23,9 +25,17 @@ from .alpha_vantage import (
     get_global_news as get_alpha_vantage_global_news,
 )
 from .alpha_vantage_common import AlphaVantageRateLimitError
+from .kite_common import KiteRateLimitError, KiteAuthError
+
+from .kite import (
+    get_stock as get_kite_stock,
+    get_indicator as get_kite_indicator,
+)
 
 # Configuration and routing logic
 from .config import get_config
+
+_log = logging.getLogger(__name__)
 
 # Tools organized by category
 TOOLS_CATEGORIES = {
@@ -63,6 +73,7 @@ TOOLS_CATEGORIES = {
 VENDOR_LIST = [
     "yfinance",
     "alpha_vantage",
+    "kite",
 ]
 
 # Mapping of methods to their vendor-specific implementations
@@ -71,11 +82,13 @@ VENDOR_METHODS = {
     "get_stock_data": {
         "alpha_vantage": get_alpha_vantage_stock,
         "yfinance": get_YFin_data_online,
+        "kite": get_kite_stock,
     },
     # technical_indicators
     "get_indicators": {
         "alpha_vantage": get_alpha_vantage_indicator,
         "yfinance": get_stock_stats_indicators_window,
+        "kite": get_kite_indicator,
     },
     # fundamental_data
     "get_fundamentals": {
@@ -156,7 +169,31 @@ def route_to_vendor(method: str, *args, **kwargs):
 
         try:
             return impl_func(*args, **kwargs)
-        except AlphaVantageRateLimitError:
-            continue  # Only rate limits trigger fallback
+        except (AlphaVantageRateLimitError, KiteRateLimitError, KiteAuthError) as e:
+            # Only rate limits / auth issues trigger fallback (log full traceback for Kite API detail)
+            _log.warning(
+                "data_vendor_fallback method=%s vendor=%s %s: %s",
+                method,
+                vendor,
+                type(e).__name__,
+                e,
+                exc_info=True,
+            )
+            continue
+        except Exception as e:
+            _log.error(
+                "data_vendor_failed method=%s vendor=%s %s: %s",
+                method,
+                vendor,
+                type(e).__name__,
+                e,
+                exc_info=True,
+            )
+            raise
 
+    _log.error(
+        "data_vendor_exhausted method=%s chain=%s",
+        method,
+        fallback_vendors,
+    )
     raise RuntimeError(f"No available vendor for '{method}'")

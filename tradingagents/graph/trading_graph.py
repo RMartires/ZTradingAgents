@@ -191,9 +191,11 @@ class TradingAgentsGraph:
 
         self.ticker = company_name
 
+        portfolio_context = self._fetch_portfolio_context()
+
         # Initialize state
         init_agent_state = self.propagator.create_initial_state(
-            company_name, trade_date
+            company_name, trade_date, portfolio_context=portfolio_context
         )
         # Pass callbacks through to LangGraph so tool execution is observable.
         args = self.propagator.get_graph_args(callbacks=self.callbacks or None)
@@ -221,6 +223,66 @@ class TradingAgentsGraph:
 
         # Return decision and processed signal
         return final_state, self.process_signal(final_state["final_trade_decision"])
+
+    def _fetch_portfolio_context(self) -> str:
+        """
+        Best-effort fetch of broker context from Kite.
+
+        If Kite is not configured (no env vars), returns an empty string so the
+        rest of the pipeline behaves exactly as today.
+        """
+        try:
+            from tradingagents.dataflows.kite_common import is_kite_configured, get_kite_session
+
+            if not is_kite_configured():
+                return ""
+
+            kite = get_kite_session().get_client()
+
+            # Best-effort: if one call fails, still try the others.
+            holdings = kite.holdings() or []
+            positions = kite.positions() or {}
+            margins = kite.margins() or {}
+
+            # Keep the prompt compact (LLM input size).
+            holdings_preview = holdings[:20] if isinstance(holdings, list) else []
+
+            # Positions are often structured as { "day": [...], "net": [...] }
+            day_positions = []
+            net_positions = []
+            if isinstance(positions, dict):
+                day_positions = positions.get("day", []) or []
+                net_positions = positions.get("net", []) or []
+            day_preview = day_positions[:20]
+            net_preview = net_positions[:20]
+
+            def fmt_cash(margin_payload: dict, segment: str) -> str:
+                seg = margin_payload.get(segment, {}) if isinstance(margin_payload, dict) else {}
+                available = seg.get("available", {}) if isinstance(seg, dict) else {}
+                live_balance = available.get("live_balance", None)
+                cash = available.get("cash", None)
+                net = seg.get("net", None)
+                return f"{segment}: net={net}, cash={cash}, live_balance={live_balance}"
+
+            equity_funds = fmt_cash(margins, "equity")
+            commodity_funds = fmt_cash(margins, "commodity")
+
+            return (
+                "## Portfolio Context (Kite)\n"
+                + "### Holdings (preview)\n"
+                + json.dumps(holdings_preview, indent=2, default=str)
+                + "\n\n### Positions (preview)\n"
+                + "#### Day\n"
+                + json.dumps(day_preview, indent=2, default=str)
+                + "\n\n#### Net\n"
+                + json.dumps(net_preview, indent=2, default=str)
+                + "\n\n### Funds & Margins (summary)\n"
+                + f"{equity_funds}\n"
+                + f"{commodity_funds}\n"
+            )
+        except Exception:
+            # Portfolio context is optional; never fail the whole analysis due to broker issues.
+            return ""
 
     def _log_state(self, trade_date, final_state):
         """Log the final state to a JSON file."""
