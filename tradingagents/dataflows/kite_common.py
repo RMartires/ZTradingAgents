@@ -3,6 +3,10 @@ import time
 from dataclasses import dataclass
 from typing import Optional, Any
 
+# Kite Connect `historical_data` (daily interval): Zerodha caps the requested range at
+# this many calendar days between from_date and to_date.
+KITE_HISTORICAL_MAX_INTERVAL_DAYS = 2000
+
 
 class KiteAuthError(RuntimeError):
     """Raised when Kite API credentials are missing or invalid."""

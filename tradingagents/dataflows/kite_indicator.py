@@ -1,13 +1,17 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 
 from dateutil.relativedelta import relativedelta
 import pandas as pd
 from stockstats import wrap
 
-from .kite_common import get_kite_session, maybe_convert_to_kite_rate_limit
+from .kite_common import (
+    KITE_HISTORICAL_MAX_INTERVAL_DAYS,
+    get_kite_session,
+    maybe_convert_to_kite_rate_limit,
+)
 from .kite_instruments import get_instrument_mapper
 from .config import get_config
 from .stockstats_utils import _clean_dataframe
@@ -139,7 +143,11 @@ def _get_stockstats_indicator_bulk(symbol: str, indicator: str, curr_date: str) 
     cache_dir = cfg.get("data_cache_dir", "dataflows/data_cache")
 
     end_dt = datetime.strptime(curr_date, "%Y-%m-%d")
-    start_dt = end_dt - relativedelta(years=15)
+    ideal_start = end_dt - relativedelta(years=15)
+    max_span_start = end_dt - timedelta(
+        days=KITE_HISTORICAL_MAX_INTERVAL_DAYS - 1
+    )
+    start_dt = max(ideal_start, max_span_start)
 
     start_date_str = start_dt.strftime("%Y-%m-%d")
     end_date_str = end_dt.strftime("%Y-%m-%d")
