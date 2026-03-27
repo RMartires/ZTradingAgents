@@ -27,7 +27,18 @@
 
 # TradingAgents: Multi-Agents LLM Financial Trading Framework
 
+## About this fork
+
+This repository is a **fork of [TauricResearch/TradingAgents](https://github.com/TauricResearch/TradingAgents)**. It stays aligned with the multi-agent research framework while focusing on **Indian markets** and day-to-day operability:
+
+- **Zerodha Kite Connect** — A full **login / token flow** (local OAuth callback + `request_token` → `access_token` exchange) and optional **Kite-backed OHLCV, quotes, and technical indicators** when you point `data_vendors` at `kite` (see `tradingagents/default_config.py` and `.env.example`).
+- **Langfuse** — **Observability** for LLM generations and tool calls via LangChain callbacks, with per-run traces and session grouping (see [Observability (Langfuse)](#observability-langfuse) below).
+- **Provider-friendly defaults** — LLM **rate limiting** and **retries** to reduce failures under API throttling (configurable via env / `DEFAULT_CONFIG`).
+
+Please continue to **cite and star the upstream project**; the paper, Discord, and core ideas remain from [Tauric Research](https://github.com/TauricResearch/).
+
 ## News
+- [2026-03] **This fork**: Zerodha Kite integration (login flow + data/indicators), Langfuse tracing, and LLM rate limiting / retries merged for Indian-market workflows.
 - [2026-03] **TradingAgents v0.2.1** released with GPT-5.4, Gemini 3.1, Claude 4.6 model coverage and improved system stability.
 - [2026-02] **TradingAgents v0.2.0** released with multi-provider LLM support (GPT-5.x, Gemini 3.x, Claude 4.x, Grok 4.x) and improved system architecture.
 - [2026-01] **Trading-R1** [Technical Report](https://arxiv.org/abs/2509.11420) released, with [Terminal](https://github.com/TauricResearch/Trading-R1) expected to land soon.
@@ -100,7 +111,7 @@ Our framework decomposes complex trading tasks into specialized roles. This ensu
 
 ### Installation
 
-Clone TradingAgents:
+Clone this repository (use your fork’s URL if applicable; upstream is [TauricResearch/TradingAgents](https://github.com/TauricResearch/TradingAgents)):
 ```bash
 git clone https://github.com/TauricResearch/TradingAgents.git
 cd TradingAgents
@@ -130,9 +141,26 @@ export OPENROUTER_API_KEY=...      # OpenRouter
 export ALPHA_VANTAGE_API_KEY=...   # Alpha Vantage
 ```
 
-### Observability (Optional: Langfuse)
+### Zerodha Kite Connect (optional, Indian markets)
 
-TradingAgents can emit Langfuse traces for LLM calls and tool execution via LangChain callbacks.
+To use **Kite** for prices, historical candles, and indicator-style series, configure `KITE_*` in `.env` (see `.env.example`) and set the relevant `data_vendors` entries to `"kite"` in `tradingagents/default_config.py` or your own config copy.
+
+**Login and access token**
+
+1. Create a Kite Connect app and set the redirect URL to **`http://127.0.0.1:8765/kite/callback`** (or match `KITE_OAUTH_*` if you override host/port/path).
+2. Set `KITE_API_KEY` and `KITE_API_SECRET` (and optionally load them via `.env`).
+3. Run the local helper:
+   ```bash
+   python scripts/kite_token_server.py
+   ```
+4. Open the Kite login URL with your API key (the script docstring shows the pattern: `https://kite.zerodha.com/connect/login?v=3&api_key=YOUR_API_KEY`).
+5. After login, the callback handler returns JSON including **`access_token`** — set it as **`KITE_ACCESS_TOKEN`** for the tradingagents Kite client.
+
+Details and troubleshooting (e.g. checksum / secret mismatches) are in the header comment of `scripts/kite_token_server.py`.
+
+### Observability (Langfuse)
+
+This fork treats **Langfuse** as the primary way to observe agent runs in production-like settings. TradingAgents emits Langfuse traces for LLM calls and tool execution via LangChain callbacks.
 
 The `langchain` package is required for Langfuse’s `CallbackHandler` (per-LLM spans under the root trace). It is listed in `pyproject.toml`; if you use `pip install -r requirements.txt`, `langchain` and `langfuse` are included.
 
