@@ -135,6 +135,20 @@ class TestKiteDataFunctions(unittest.TestCase):
         with self.assertRaises(ValueError):
             get_indicators("RELIANCE.NS", "not_a_real_indicator", "2024-01-02", look_back_days=1)
 
+    def test_get_stock_data_tool_rejects_truncated_end_date(self):
+        from tradingagents.agents.utils.core_stock_tools import get_stock_data
+
+        with self.assertRaises(ValueError) as ctx:
+            get_stock_data.invoke(
+                {
+                    "symbol": "RELIANCE",
+                    "start_date": "2024-04-10",
+                    "end_date": "2024-",
+                }
+            )
+        self.assertIn("end_date", str(ctx.exception).lower())
+        self.assertIn("yyyy-mm-dd", str(ctx.exception).lower())
+
 
 if __name__ == "__main__":
     unittest.main()
