@@ -26,6 +26,10 @@ def create_llm_client(
             - api_key: API key for the provider
             - callbacks: LangChain callbacks
 
+    Graph-wide LLM throttling is configured on ``TradingAgentsGraph`` via
+    ``config['llm_rate_limit_rpm']`` (or env ``LLM_RATE_LIMIT_RPM`` in ``main.py``),
+    not via this factory.
+
     Returns:
         Configured BaseLLMClient instance
 

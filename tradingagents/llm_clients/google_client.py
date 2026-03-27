@@ -1,8 +1,15 @@
 from typing import Any, Optional
 
+from langchain_core.callbacks import (
+    AsyncCallbackManagerForLLMRun,
+    CallbackManagerForLLMRun,
+)
+from langchain_core.messages import BaseMessage
+from langchain_core.outputs import ChatResult
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 from .base_client import BaseLLMClient
+from .llm_rate_limit import acquire_llm_slot, async_acquire_llm_slot
 from .validators import validate_model
 
 
@@ -26,6 +33,30 @@ class NormalizedChatGoogleGenerativeAI(ChatGoogleGenerativeAI):
 
     def invoke(self, input, config=None, **kwargs):
         return self._normalize_content(super().invoke(input, config, **kwargs))
+
+    def _generate(
+        self,
+        messages: list[BaseMessage],
+        stop: Optional[list[str]] = None,
+        run_manager: Optional[CallbackManagerForLLMRun] = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        acquire_llm_slot()
+        return super()._generate(
+            messages, stop=stop, run_manager=run_manager, **kwargs
+        )
+
+    async def _agenerate(
+        self,
+        messages: list[BaseMessage],
+        stop: Optional[list[str]] = None,
+        run_manager: Optional[AsyncCallbackManagerForLLMRun] = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        await async_acquire_llm_slot()
+        return await super()._agenerate(
+            messages, stop=stop, run_manager=run_manager, **kwargs
+        )
 
 
 class GoogleClient(BaseLLMClient):

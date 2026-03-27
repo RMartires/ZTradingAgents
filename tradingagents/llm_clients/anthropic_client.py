@@ -1,9 +1,42 @@
 from typing import Any, Optional
 
+from langchain_core.callbacks import (
+    AsyncCallbackManagerForLLMRun,
+    CallbackManagerForLLMRun,
+)
+from langchain_core.messages import BaseMessage
+from langchain_core.outputs import ChatResult
 from langchain_anthropic import ChatAnthropic
 
 from .base_client import BaseLLMClient
+from .llm_rate_limit import acquire_llm_slot, async_acquire_llm_slot
 from .validators import validate_model
+
+
+class RateLimitedChatAnthropic(ChatAnthropic):
+    def _generate(
+        self,
+        messages: list[BaseMessage],
+        stop: Optional[list[str]] = None,
+        run_manager: Optional[CallbackManagerForLLMRun] = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        acquire_llm_slot()
+        return super()._generate(
+            messages, stop=stop, run_manager=run_manager, **kwargs
+        )
+
+    async def _agenerate(
+        self,
+        messages: list[BaseMessage],
+        stop: Optional[list[str]] = None,
+        run_manager: Optional[AsyncCallbackManagerForLLMRun] = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        await async_acquire_llm_slot()
+        return await super()._agenerate(
+            messages, stop=stop, run_manager=run_manager, **kwargs
+        )
 
 
 class AnthropicClient(BaseLLMClient):
@@ -20,7 +53,7 @@ class AnthropicClient(BaseLLMClient):
             if key in self.kwargs:
                 llm_kwargs[key] = self.kwargs[key]
 
-        return ChatAnthropic(**llm_kwargs)
+        return RateLimitedChatAnthropic(**llm_kwargs)
 
     def validate_model(self) -> bool:
         """Validate model for Anthropic."""

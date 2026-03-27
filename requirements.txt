@@ -21,3 +21,4 @@ typer
 questionary
 langchain_anthropic
 langchain-google-genai
+kiteconnect>=5.0.1

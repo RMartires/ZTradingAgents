@@ -51,6 +51,11 @@ class AgentState(MessagesState):
     company_of_interest: Annotated[str, "Company that we are interested in trading"]
     trade_date: Annotated[str, "What date we are trading at"]
 
+    # Broker context (holdings/positions/funds). Injected for portfolio-aware decisions.
+    portfolio_context: Annotated[
+        str, "Current portfolio holdings/positions and available funds context"
+    ]
+
     sender: Annotated[str, "Agent that sent this message"]
 
     # research step
