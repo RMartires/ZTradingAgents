@@ -1,10 +1,75 @@
+import asyncio
+import logging
 import os
+import random
+import time
 from typing import Any, Optional
 
+from langchain_core.callbacks import (
+    AsyncCallbackManagerForLLMRun,
+    CallbackManagerForLLMRun,
+)
+from langchain_core.messages import BaseMessage
+from langchain_core.outputs import ChatResult
 from langchain_openai import ChatOpenAI
 
 from .base_client import BaseLLMClient
+from .llm_rate_limit import acquire_llm_slot, async_acquire_llm_slot
 from .validators import validate_model
+
+_log = logging.getLogger(__name__)
+
+
+def _provider_error_max_attempts() -> int:
+    """How many times to retry when the API returns an error object inside a 200 JSON body (e.g. OpenRouter)."""
+    try:
+        n = int(os.getenv("LLM_PROVIDER_ERROR_MAX_ATTEMPTS", "4"))
+    except ValueError:
+        n = 4
+    return max(1, min(n, 20))
+
+
+def _is_retriable_openai_compatible_payload(err: object) -> bool:
+    """True if LangChain raised ValueError(payload) from _create_chat_result and we should retry."""
+    if not isinstance(err, dict):
+        return False
+    msg = err.get("message")
+    if isinstance(msg, str):
+        low = msg.lower()
+        if any(
+            s in low
+            for s in (
+                "rate limit",
+                "too many requests",
+                "timeout",
+                "provider returned error",
+                "temporarily",
+                "overloaded",
+            )
+        ):
+            return True
+    code = err.get("code")
+    if code is None:
+        return False
+    try:
+        c = int(code)
+    except (TypeError, ValueError):
+        return False
+    if c == 429:
+        return True
+    if 500 <= c <= 599:
+        return True
+    return c in (408, 409)
+
+
+def _is_retriable_provider_value_error(exc: BaseException) -> bool:
+    if not isinstance(exc, ValueError) or not exc.args:
+        return False
+    return _is_retriable_openai_compatible_payload(exc.args[0])
+
+
+def _backoff_seconds(attempt: int) -> float:
+    return min(0.5 * (2**attempt), 8.0) + random.uniform(0, 0.35)
 
 
 class UnifiedChatOpenAI(ChatOpenAI):
@@ -17,6 +82,10 @@ class UnifiedChatOpenAI(ChatOpenAI):
     strip it to avoid errors.
 
     Non-GPT-5 models (GPT-4.1, xAI, Ollama, etc.) are unaffected.
+
+    Also retries when the HTTP response is 200 but the JSON body contains
+    ``error`` (OpenRouter and some gateways report 502/429 that way), which
+    bypasses the OpenAI SDK's HTTP-level retries.
     """
 
     def __init__(self, **kwargs):
@@ -24,6 +93,68 @@ class UnifiedChatOpenAI(ChatOpenAI):
             kwargs.pop("temperature", None)
             kwargs.pop("top_p", None)
         super().__init__(**kwargs)
+
+    def _generate(
+        self,
+        messages: list[BaseMessage],
+        stop: Optional[list[str]] = None,
+        run_manager: Optional[CallbackManagerForLLMRun] = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        attempts = _provider_error_max_attempts()
+        last: Optional[BaseException] = None
+        for attempt in range(attempts):
+            try:
+                acquire_llm_slot()
+                return super()._generate(
+                    messages, stop=stop, run_manager=run_manager, **kwargs
+                )
+            except ValueError as e:
+                last = e
+                if not _is_retriable_provider_value_error(e) or attempt == attempts - 1:
+                    raise
+                delay = _backoff_seconds(attempt)
+                _log.warning(
+                    "LLM provider error (attempt %s/%s), retrying in %.2fs: %s",
+                    attempt + 1,
+                    attempts,
+                    delay,
+                    e.args[0] if e.args else e,
+                )
+                time.sleep(delay)
+        assert last is not None
+        raise last
+
+    async def _agenerate(
+        self,
+        messages: list[BaseMessage],
+        stop: Optional[list[str]] = None,
+        run_manager: Optional[AsyncCallbackManagerForLLMRun] = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        attempts = _provider_error_max_attempts()
+        last: Optional[BaseException] = None
+        for attempt in range(attempts):
+            try:
+                await async_acquire_llm_slot()
+                return await super()._agenerate(
+                    messages, stop=stop, run_manager=run_manager, **kwargs
+                )
+            except ValueError as e:
+                last = e
+                if not _is_retriable_provider_value_error(e) or attempt == attempts - 1:
+                    raise
+                delay = _backoff_seconds(attempt)
+                _log.warning(
+                    "LLM provider error (attempt %s/%s), retrying in %.2fs: %s",
+                    attempt + 1,
+                    attempts,
+                    delay,
+                    e.args[0] if e.args else e,
+                )
+                await asyncio.sleep(delay)
+        assert last is not None
+        raise last
 
 
 class OpenAIClient(BaseLLMClient):

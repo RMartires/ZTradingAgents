@@ -9,6 +9,7 @@ from typing import Dict, Any, Tuple, List, Optional
 from langgraph.prebuilt import ToolNode
 
 from tradingagents.llm_clients import create_llm_client
+from tradingagents.llm_clients.llm_rate_limit import set_llm_rate_limit_rpm
 
 from tradingagents.agents import *
 from tradingagents.default_config import DEFAULT_CONFIG
@@ -61,6 +62,8 @@ class TradingAgentsGraph:
         self.debug = debug
         self.config = config or DEFAULT_CONFIG
         self.callbacks = callbacks or []
+
+        set_llm_rate_limit_rpm(self.config.get("llm_rate_limit_rpm"))
 
         # Update the interface's config
         set_config(self.config)
@@ -147,6 +150,11 @@ class TradingAgentsGraph:
             reasoning_effort = self.config.get("openai_reasoning_effort")
             if reasoning_effort:
                 kwargs["reasoning_effort"] = reasoning_effort
+
+        if self.config.get("llm_max_retries") is not None:
+            kwargs["max_retries"] = int(self.config["llm_max_retries"])
+        if self.config.get("llm_timeout") is not None:
+            kwargs["timeout"] = float(self.config["llm_timeout"])
 
         return kwargs
 

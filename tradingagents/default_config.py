@@ -15,6 +15,12 @@ DEFAULT_CONFIG = {
     # Provider-specific thinking configuration
     "google_thinking_level": None,      # "high", "minimal", etc.
     "openai_reasoning_effort": None,    # "medium", "high", "low"
+    # OpenAI-compatible clients only (OpenAI, OpenRouter, xAI, Ollama): forwarded to ChatOpenAI
+    # max_retries = HTTP-level retries in the OpenAI SDK (5xx, 429, etc.)
+    "llm_max_retries": None,
+    "llm_timeout": None,
+    # Max LLM API completions per rolling 60s (all models share one limit). None disables.
+    "llm_rate_limit_rpm": None,
     # Debate and discussion settings
     "max_debate_rounds": 1,
     "max_risk_discuss_rounds": 1,

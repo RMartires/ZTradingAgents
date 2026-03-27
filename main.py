@@ -49,6 +49,15 @@ config["quick_think_llm"] = os.getenv("QUICK_THINK_LLM", "openrouter/free")
 config["deep_think_llm"] = os.getenv("DEEP_THINK_LLM", "openrouter/free")
 config["max_debate_rounds"] = 1
 
+# Optional: HTTP-level retries in the OpenAI SDK (5xx / 429 on the wire). Default SDK behavior is 2.
+if os.getenv("LLM_MAX_RETRIES", "").strip():
+    config["llm_max_retries"] = int(os.getenv("LLM_MAX_RETRIES", "2"))
+# Optional: per-request timeout in seconds for the LLM HTTP client
+if os.getenv("LLM_TIMEOUT", "").strip():
+    config["llm_timeout"] = float(os.getenv("LLM_TIMEOUT", "600"))
+if os.getenv("LLM_RATE_LIMIT_RPM", "").strip():
+    config["llm_rate_limit_rpm"] = float(os.getenv("LLM_RATE_LIMIT_RPM", "0"))
+
 # Configure data vendors (default uses yfinance, no extra API keys needed)
 config["data_vendors"] = {
     "core_stock_apis": "kite",
