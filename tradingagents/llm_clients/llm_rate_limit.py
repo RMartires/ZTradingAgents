@@ -9,14 +9,17 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import threading
 import time
 from collections import deque
-from typing import Deque, Optional
+from datetime import datetime, timezone
+from typing import Deque, Optional, Tuple
 
 _log = logging.getLogger(__name__)
 
 _limiter_lock = threading.Lock()
+_completion_log_configured = False
 _limiter: Optional["LLMRateLimiter"] = None
 
 
@@ -31,6 +34,13 @@ class LLMRateLimiter:
         self.max_calls = max_calls
         self._lock = threading.Lock()
         self._calls: Deque[float] = deque()
+
+    def window_count(self) -> Tuple[int, int]:
+        """(calls counted in the last 60s wall clock, max_calls cap). Does not mutate state."""
+        with self._lock:
+            now = time.time()
+            active = sum(1 for t in self._calls if now - t < 60.0)
+            return (active, self.max_calls)
 
     def acquire(self) -> None:
         while True:
@@ -63,6 +73,26 @@ class LLMRateLimiter:
             await asyncio.sleep(wait)
 
 
+def configure_llm_completion_logging() -> None:
+    """
+    Make per-call LLM completion lines visible when root ``LOG_LEVEL`` is WARNING (the default).
+
+    Uses a dedicated stderr handler on this logger. Disable with ``LLM_COMPLETION_LOG=0``.
+    """
+    global _completion_log_configured
+    if _completion_log_configured:
+        return
+    _completion_log_configured = True
+    if os.getenv("LLM_COMPLETION_LOG", "1").strip().lower() in ("0", "false", "no", "off"):
+        return
+    _log.setLevel(logging.INFO)
+    h = logging.StreamHandler()
+    h.setLevel(logging.INFO)
+    h.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+    _log.addHandler(h)
+    _log.propagate = False
+
+
 def set_llm_rate_limit_rpm(rpm: Optional[float]) -> None:
     """
     Configure the process-wide LLM rate limit.
@@ -93,3 +123,38 @@ async def async_acquire_llm_slot() -> None:
     lim = _limiter
     if lim is not None:
         await lim.async_acquire()
+
+
+def get_rate_limit_snapshot() -> Optional[Tuple[int, int]]:
+    """If RPM limiting is on, return ``(calls_in_last_60s, cap)``; else ``None``."""
+    lim = _limiter
+    if lim is None:
+        return None
+    return lim.window_count()
+
+
+def log_llm_completion_request(label: str = "") -> None:
+    """
+    Log one line per completion API attempt (after rate-limit slot, before HTTP).
+
+    ``TradingAgentsGraph`` calls ``configure_llm_completion_logging()`` so these show even when
+    ``LOG_LEVEL=WARNING``. Set ``LLM_COMPLETION_LOG=0`` to turn them off.
+    """
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+    tag = label.strip() or "request"
+    snap = get_rate_limit_snapshot()
+    if snap is not None:
+        used, cap = snap
+        _log.info(
+            "LLM completion [%s] at %s rate_window=%s/%s (rolling 60s)",
+            tag,
+            ts,
+            used,
+            cap,
+        )
+    else:
+        _log.info(
+            "LLM completion [%s] at %s (rate_limit off)",
+            tag,
+            ts,
+        )

@@ -1,9 +1,10 @@
 import asyncio
 import logging
 import os
-import random
 import time
 from typing import Any, Optional
+
+import openai
 
 from langchain_core.callbacks import (
     AsyncCallbackManagerForLLMRun,
@@ -14,7 +15,11 @@ from langchain_core.outputs import ChatResult
 from langchain_openai import ChatOpenAI
 
 from .base_client import BaseLLMClient
-from .llm_rate_limit import acquire_llm_slot, async_acquire_llm_slot
+from .llm_rate_limit import (
+    acquire_llm_slot,
+    async_acquire_llm_slot,
+    log_llm_completion_request,
+)
 from .validators import validate_model
 
 _log = logging.getLogger(__name__)
@@ -27,6 +32,22 @@ def _provider_error_max_attempts() -> int:
     except ValueError:
         n = 4
     return max(1, min(n, 20))
+
+
+def _retry_base_seconds() -> float:
+    """Sleep before first retry (attempt 0). Env: ``LLM_RETRY_FIRST_WAIT_SEC`` (default 60)."""
+    try:
+        return max(0.0, float(os.getenv("LLM_RETRY_FIRST_WAIT_SEC", "60")))
+    except ValueError:
+        return 60.0
+
+
+def _retry_step_seconds() -> float:
+    """Extra seconds added per subsequent retry (per attempt index). Env: ``LLM_RETRY_STEP_SEC`` (default 30)."""
+    try:
+        return max(0.0, float(os.getenv("LLM_RETRY_STEP_SEC", "30")))
+    except ValueError:
+        return 30.0
 
 
 def _is_retriable_openai_compatible_payload(err: object) -> bool:
@@ -68,8 +89,30 @@ def _is_retriable_provider_value_error(exc: BaseException) -> bool:
     return _is_retriable_openai_compatible_payload(exc.args[0])
 
 
+def _is_retriable_openai_sdk_error(exc: BaseException) -> bool:
+    """True for HTTP/SDK failures that are worth retrying (429, 5xx, timeouts, connect errors)."""
+    if isinstance(exc, openai.APIConnectionError):
+        return True
+    if isinstance(exc, openai.RateLimitError):
+        return True
+    if isinstance(exc, openai.InternalServerError):
+        return True
+    if isinstance(exc, openai.APIStatusError):
+        code = exc.status_code
+        if code in (408, 409, 429):
+            return True
+        if 500 <= code <= 599:
+            return True
+        return False
+    return False
+
+
 def _backoff_seconds(attempt: int) -> float:
-    return min(0.5 * (2**attempt), 8.0) + random.uniform(0, 0.35)
+    """Linear backoff: base + step * attempt (e.g. 60s, 90s, 120s, … with defaults).
+
+    Used for all retriable failures (JSON-body errors, HTTP 429, 5xx, connection errors).
+    """
+    return _retry_base_seconds() + _retry_step_seconds() * float(attempt)
 
 
 class UnifiedChatOpenAI(ChatOpenAI):
@@ -86,6 +129,12 @@ class UnifiedChatOpenAI(ChatOpenAI):
     Also retries when the HTTP response is 200 but the JSON body contains
     ``error`` (OpenRouter and some gateways report 502/429 that way), which
     bypasses the OpenAI SDK's HTTP-level retries.
+
+    Retries ``openai.RateLimitError`` (HTTP 429), connection/timeouts, and 5xx
+    class responses after the SDK's own ``max_retries`` are exhausted.
+
+    Between attempts, waits ``LLM_RETRY_FIRST_WAIT_SEC + LLM_RETRY_STEP_SEC * attempt``
+    seconds (defaults 60 + 30 per attempt), including for HTTP 429.
     """
 
     def __init__(self, **kwargs):
@@ -93,6 +142,10 @@ class UnifiedChatOpenAI(ChatOpenAI):
             kwargs.pop("temperature", None)
             kwargs.pop("top_p", None)
         super().__init__(**kwargs)
+
+    def _llm_log_label(self) -> str:
+        mid = getattr(self, "model_name", None) or getattr(self, "model", None) or ""
+        return f"ChatOpenAI model={mid}"
 
     def _generate(
         self,
@@ -106,6 +159,7 @@ class UnifiedChatOpenAI(ChatOpenAI):
         for attempt in range(attempts):
             try:
                 acquire_llm_slot()
+                log_llm_completion_request(self._llm_log_label())
                 return super()._generate(
                     messages, stop=stop, run_manager=run_manager, **kwargs
                 )
@@ -120,6 +174,19 @@ class UnifiedChatOpenAI(ChatOpenAI):
                     attempts,
                     delay,
                     e.args[0] if e.args else e,
+                )
+                time.sleep(delay)
+            except openai.OpenAIError as e:
+                last = e
+                if not _is_retriable_openai_sdk_error(e) or attempt == attempts - 1:
+                    raise
+                delay = _backoff_seconds(attempt)
+                _log.warning(
+                    "LLM API error (attempt %s/%s), retrying in %.2fs: %s",
+                    attempt + 1,
+                    attempts,
+                    delay,
+                    e,
                 )
                 time.sleep(delay)
         assert last is not None
@@ -137,6 +204,7 @@ class UnifiedChatOpenAI(ChatOpenAI):
         for attempt in range(attempts):
             try:
                 await async_acquire_llm_slot()
+                log_llm_completion_request(self._llm_log_label())
                 return await super()._agenerate(
                     messages, stop=stop, run_manager=run_manager, **kwargs
                 )
@@ -151,6 +219,19 @@ class UnifiedChatOpenAI(ChatOpenAI):
                     attempts,
                     delay,
                     e.args[0] if e.args else e,
+                )
+                await asyncio.sleep(delay)
+            except openai.OpenAIError as e:
+                last = e
+                if not _is_retriable_openai_sdk_error(e) or attempt == attempts - 1:
+                    raise
+                delay = _backoff_seconds(attempt)
+                _log.warning(
+                    "LLM API error (attempt %s/%s), retrying in %.2fs: %s",
+                    attempt + 1,
+                    attempts,
+                    delay,
+                    e,
                 )
                 await asyncio.sleep(delay)
         assert last is not None

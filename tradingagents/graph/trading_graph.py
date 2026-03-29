@@ -9,7 +9,10 @@ from typing import Dict, Any, Tuple, List, Optional
 from langgraph.prebuilt import ToolNode
 
 from tradingagents.llm_clients import create_llm_client
-from tradingagents.llm_clients.llm_rate_limit import set_llm_rate_limit_rpm
+from tradingagents.llm_clients.llm_rate_limit import (
+    configure_llm_completion_logging,
+    set_llm_rate_limit_rpm,
+)
 
 from tradingagents.agents import *
 from tradingagents.default_config import DEFAULT_CONFIG
@@ -63,6 +66,7 @@ class TradingAgentsGraph:
         self.config = config or DEFAULT_CONFIG
         self.callbacks = callbacks or []
 
+        configure_llm_completion_logging()
         set_llm_rate_limit_rpm(self.config.get("llm_rate_limit_rpm"))
 
         # Update the interface's config

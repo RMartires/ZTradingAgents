@@ -1,8 +1,10 @@
 import time
 import json
 
+from tradingagents.llm_clients.invoke_fallback import invoke_chat_with_deep_fallback
 
-def create_risk_manager(llm, memory):
+
+def create_risk_manager(llm, memory, fallback_llm=None):
     def risk_manager_node(state) -> dict:
 
         company_name = state["company_of_interest"]
@@ -51,7 +53,12 @@ Deliverables:
 
 Focus on actionable insights and continuous improvement. Build on past lessons, critically evaluate all perspectives, and ensure each decision advances better outcomes."""
 
-        response = llm.invoke(prompt)
+        response = invoke_chat_with_deep_fallback(
+            llm,
+            prompt,
+            fallback_llm=fallback_llm,
+            context="Risk Manager",
+        )
 
         new_risk_debate_state = {
             "judge_decision": response.content,

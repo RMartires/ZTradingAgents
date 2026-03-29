@@ -9,7 +9,11 @@ from langchain_core.outputs import ChatResult
 from langchain_anthropic import ChatAnthropic
 
 from .base_client import BaseLLMClient
-from .llm_rate_limit import acquire_llm_slot, async_acquire_llm_slot
+from .llm_rate_limit import (
+    acquire_llm_slot,
+    async_acquire_llm_slot,
+    log_llm_completion_request,
+)
 from .validators import validate_model
 
 
@@ -22,6 +26,9 @@ class RateLimitedChatAnthropic(ChatAnthropic):
         **kwargs: Any,
     ) -> ChatResult:
         acquire_llm_slot()
+        log_llm_completion_request(
+            f"Anthropic model={getattr(self, 'model', '') or ''}"
+        )
         return super()._generate(
             messages, stop=stop, run_manager=run_manager, **kwargs
         )
@@ -34,6 +41,9 @@ class RateLimitedChatAnthropic(ChatAnthropic):
         **kwargs: Any,
     ) -> ChatResult:
         await async_acquire_llm_slot()
+        log_llm_completion_request(
+            f"Anthropic model={getattr(self, 'model', '') or ''}"
+        )
         return await super()._agenerate(
             messages, stop=stop, run_manager=run_manager, **kwargs
         )

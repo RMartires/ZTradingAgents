@@ -1,8 +1,10 @@
 import time
 import json
 
+from tradingagents.llm_clients.invoke_fallback import invoke_chat_with_deep_fallback
 
-def create_research_manager(llm, memory):
+
+def create_research_manager(llm, memory, fallback_llm=None):
     def research_manager_node(state) -> dict:
         history = state["investment_debate_state"].get("history", "")
         market_research_report = state["market_report"]
@@ -36,7 +38,12 @@ Here are your past reflections on mistakes:
 Here is the debate:
 Debate History:
 {history}"""
-        response = llm.invoke(prompt)
+        response = invoke_chat_with_deep_fallback(
+            llm,
+            prompt,
+            fallback_llm=fallback_llm,
+            context="Research Manager",
+        )
 
         new_investment_debate_state = {
             "judge_decision": response.content,
