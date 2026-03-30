@@ -198,16 +198,37 @@ class TradingAgentsGraph:
             ),
         }
 
-    def propagate(self, company_name, trade_date):
-        """Run the trading agents graph for a company on a specific date."""
+    def propagate(
+        self,
+        company_name,
+        trade_date,
+        *,
+        portfolio_context: Optional[str] = None,
+        use_live_portfolio: bool = True,
+    ):
+        """Run the trading agents graph for a company on a specific date.
+
+        Args:
+            company_name: Ticker / company identifier passed to the graph.
+            trade_date: As-of date (YYYY-MM-DD).
+            portfolio_context: If set, injected into agent state and live Kite fetch is skipped.
+            use_live_portfolio: When True and ``portfolio_context`` is None, load portfolio from Kite
+                (if configured). When False and ``portfolio_context`` is None, use empty context
+                (e.g. historical backtests without broker data).
+        """
 
         self.ticker = company_name
 
-        portfolio_context = self._fetch_portfolio_context()
+        if portfolio_context is not None:
+            pc = portfolio_context
+        elif not use_live_portfolio:
+            pc = ""
+        else:
+            pc = self._fetch_portfolio_context()
 
         # Initialize state
         init_agent_state = self.propagator.create_initial_state(
-            company_name, trade_date, portfolio_context=portfolio_context
+            company_name, trade_date, portfolio_context=pc
         )
         # Pass callbacks through to LangGraph so tool execution is observable.
         args = self.propagator.get_graph_args(callbacks=self.callbacks or None)
