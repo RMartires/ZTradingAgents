@@ -5,6 +5,7 @@ langfuse
 langchain-openai
 langchain-experimental
 pandas
+matplotlib
 yfinance
 stockstats
 langgraph
