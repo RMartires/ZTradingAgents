@@ -6,6 +6,7 @@ execute paper trades at close, write eval_results/<ticker>/backtest_mvp_<id>/.
 For one-off runs (no ``--dates-csv``), `equity.csv`, `trades.csv`, and `summary.json` are refreshed.
 When ``--dates-csv`` is provided, the schedule CSV becomes the source of truth for progress and portfolio state:
 columns `date`, `processed`, `final_signal`, `close`, `cash`, `shares`, `equity`, `error` (atomic rewrites).
+Saturday/Sunday rows are not backtested: they are marked ``processed=true`` with ``error=not trading day``.
 In this mode, the per-run output folder only updates `summary.json`.
 
 Usage (from repo root):
@@ -21,6 +22,7 @@ import argparse
 import logging
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -29,11 +31,12 @@ if str(ROOT) not in sys.path:
 
 from cli.stats_handler import StatsCallbackHandler
 from tradingagents.backtest.dates_schedule import (
+    is_row_processed,
+    last_successful_ledger_state,
     pending_schedule_dates,
     read_dates_schedule,
     update_schedule_row,
     write_dates_schedule_atomic,
-    last_successful_ledger_state,
 )
 from tradingagents.observability.langfuse_config import get_langfuse_client, get_langfuse_handler
 
@@ -120,6 +123,51 @@ def _parse_dates(args: argparse.Namespace) -> list[str]:
     return unique
 
 
+_WEEKEND_SKIP_ERROR = "not trading day"
+
+
+def _is_weekend_ymd(date_str: str) -> bool:
+    """True if ``YYYY-MM-DD`` is Saturday or Sunday (calendar). Invalid dates return False."""
+    try:
+        d = datetime.strptime(date_str.strip(), "%Y-%m-%d").date()
+    except ValueError:
+        return False
+    return d.weekday() >= 5
+
+
+def _mark_weekend_rows_skipped(
+    schedule_path: Path,
+    schedule_rows: list[dict[str, str]],
+) -> None:
+    """Mark unprocessed weekend rows as processed with ``not trading day``; persist if any changed."""
+    changed = False
+    for r in schedule_rows:
+        d = str(r.get("date", "")).strip()
+        if not d or is_row_processed(r.get("processed")):
+            continue
+        if not _is_weekend_ymd(d):
+            continue
+        update_schedule_row(
+            schedule_rows,
+            d,
+            processed=True,
+            final_signal="",
+            equity="",
+            error=_WEEKEND_SKIP_ERROR,
+            close="",
+            cash="",
+            shares="",
+        )
+        changed = True
+    if changed:
+        write_dates_schedule_atomic(schedule_path, schedule_rows)
+        logging.info(
+            "Marked weekend row(s) as skipped (%r) in %s",
+            _WEEKEND_SKIP_ERROR,
+            schedule_path,
+        )
+
+
 def main() -> int:
     _load_dotenv()
 
@@ -179,18 +227,31 @@ def main() -> int:
         if not schedule_rows:
             logging.error("No rows in %s", schedule_path)
             return 2
+        _mark_weekend_rows_skipped(schedule_path, schedule_rows)
         dates = pending_schedule_dates(schedule_rows)
         langfuse_dates_total = len(schedule_rows)
         if not dates:
-            logging.error("No pending dates in %s (all processed?)", schedule_path)
+            logging.error(
+                "No pending weekdays in %s (all processed or weekends skipped?)",
+                schedule_path,
+            )
             return 2
         logging.info("Running %s pending date(s) from %s", len(dates), schedule_path)
     else:
-        dates = bootstrap_dates
-        if not dates:
-            logging.error(
-                "Provide --dates and/or --dates-file, or --dates-csv with a non-empty schedule"
+        weekend_only = [d for d in bootstrap_dates if _is_weekend_ymd(d)]
+        if weekend_only:
+            logging.info(
+                "Skipping weekend dates (no --dates-csv): %s",
+                ", ".join(weekend_only),
             )
+        dates = [d for d in bootstrap_dates if not _is_weekend_ymd(d)]
+        if not dates:
+            if bootstrap_dates:
+                logging.error("All requested dates are weekends; nothing to run.")
+            else:
+                logging.error(
+                    "Provide --dates and/or --dates-file, or --dates-csv with a non-empty schedule"
+                )
             return 2
 
     if schedule_rows is not None and schedule_path is not None:
