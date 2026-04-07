@@ -2,12 +2,21 @@ from __future__ import annotations
 
 from datetime import datetime
 import json
+import logging
+import time
 from typing import List, Dict, Any, Optional
 
 import pandas as pd
+import requests
 
 from .kite_common import get_kite_session, KiteRateLimitError, maybe_convert_to_kite_rate_limit
 from .kite_instruments import get_instrument_mapper
+
+_log = logging.getLogger(__name__)
+
+# Transient Kite API disconnects (e.g. RemoteDisconnected) often succeed on retry.
+_HISTORICAL_MAX_ATTEMPTS = 4
+_HISTORICAL_RETRY_BASE_DELAY_SEC = 2.0
 
 
 def get_stock_data(
@@ -20,21 +29,50 @@ def get_stock_data(
 
     Returns the same high-level string/CSV format as `y_finance.get_YFin_data_online`.
     """
+    mapper = get_instrument_mapper()
+    resolved = mapper.resolve(symbol)
+
+    records: List[Dict[str, Any]] | None = None
+    for attempt in range(_HISTORICAL_MAX_ATTEMPTS):
+        try:
+            kite = get_kite_session().get_client()
+            start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+            end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+
+            records = kite.historical_data(
+                resolved["instrument_token"],
+                start_dt,
+                end_dt,
+                interval="day",
+            )
+            break
+        except Exception as e:
+            converted = maybe_convert_to_kite_rate_limit(e)
+            if isinstance(converted, KiteRateLimitError):
+                raise converted from e
+            transient = isinstance(
+                e,
+                (requests.exceptions.ConnectionError, requests.exceptions.Timeout),
+            )
+            if transient and attempt + 1 < _HISTORICAL_MAX_ATTEMPTS:
+                delay = _HISTORICAL_RETRY_BASE_DELAY_SEC * (attempt + 1)
+                _log.warning(
+                    "Kite historical_data %s %s–%s failed (%s/%s): %s; retry in %.1fs",
+                    symbol,
+                    start_date,
+                    end_date,
+                    attempt + 1,
+                    _HISTORICAL_MAX_ATTEMPTS,
+                    e,
+                    delay,
+                )
+                time.sleep(delay)
+                continue
+            raise
+
+    assert records is not None  # loop exits via break after assignment or raises
+
     try:
-        mapper = get_instrument_mapper()
-        resolved = mapper.resolve(symbol)
-        kite = get_kite_session().get_client()
-
-        start_dt = datetime.strptime(start_date, "%Y-%m-%d")
-        end_dt = datetime.strptime(end_date, "%Y-%m-%d")
-
-        records: List[Dict[str, Any]] = kite.historical_data(
-            resolved["instrument_token"],
-            start_dt,
-            end_dt,
-            interval="day",
-        )
-
         if not records:
             return f"No data found for symbol '{symbol}' between {start_date} and {end_date}"
 
