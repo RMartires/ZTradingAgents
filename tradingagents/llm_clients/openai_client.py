@@ -1,9 +1,12 @@
 import asyncio
+import json
 import logging
 import os
 import time
+from contextvars import ContextVar
 from typing import Any, Optional
 
+import httpx
 import openai
 
 from langchain_core.callbacks import (
@@ -23,6 +26,42 @@ from .llm_rate_limit import (
 from .validators import validate_model
 
 _log = logging.getLogger(__name__)
+
+_LAST_HTTP_RESPONSE: ContextVar[dict[str, Any] | None] = ContextVar(
+    "_LAST_HTTP_RESPONSE", default=None
+)
+
+
+def _capture_http_response(resp: httpx.Response) -> None:
+    try:
+        body = resp.text
+    except Exception:
+        body = "<unavailable>"
+    # Keep logs bounded; responses can be huge.
+    if isinstance(body, str) and len(body) > 4000:
+        body = body[:4000] + "\n…<truncated>…"
+    _LAST_HTTP_RESPONSE.set(
+        {
+            "status_code": resp.status_code,
+            "url": str(resp.url),
+            "headers": dict(resp.headers),
+            "body": body,
+        }
+    )
+
+
+def _build_http_clients_with_capture() -> tuple[httpx.Client, httpx.AsyncClient]:
+    hooks = {"response": [_capture_http_response]}
+    return (
+        httpx.Client(event_hooks=hooks),
+        httpx.AsyncClient(event_hooks=hooks),
+    )
+
+
+def _should_capture_raw_response() -> bool:
+    # Default on; can be disabled via env for noise/perf.
+    v = os.getenv("LLM_CAPTURE_RAW_RESPONSE", "1").strip().lower()
+    return v not in ("0", "false", "no", "off")
 
 
 def _provider_error_max_attempts() -> int:
@@ -163,6 +202,21 @@ class UnifiedChatOpenAI(ChatOpenAI):
                 return super()._generate(
                     messages, stop=stop, run_manager=run_manager, **kwargs
                 )
+            except json.JSONDecodeError as e:
+                last = e
+                if attempt == attempts - 1:
+                    raise
+                delay = _backoff_seconds(attempt)
+                raw = _LAST_HTTP_RESPONSE.get()
+                _log.warning(
+                    "LLM response JSON decode error (attempt %s/%s), retrying in %.2fs: %s raw=%s",
+                    attempt + 1,
+                    attempts,
+                    delay,
+                    e,
+                    raw,
+                )
+                time.sleep(delay)
             except ValueError as e:
                 last = e
                 if not _is_retriable_provider_value_error(e) or attempt == attempts - 1:
@@ -208,6 +262,21 @@ class UnifiedChatOpenAI(ChatOpenAI):
                 return await super()._agenerate(
                     messages, stop=stop, run_manager=run_manager, **kwargs
                 )
+            except json.JSONDecodeError as e:
+                last = e
+                if attempt == attempts - 1:
+                    raise
+                delay = _backoff_seconds(attempt)
+                raw = _LAST_HTTP_RESPONSE.get()
+                _log.warning(
+                    "LLM response JSON decode error (attempt %s/%s), retrying in %.2fs: %s raw=%s",
+                    attempt + 1,
+                    attempts,
+                    delay,
+                    e,
+                    raw,
+                )
+                await asyncio.sleep(delay)
             except ValueError as e:
                 last = e
                 if not _is_retriable_provider_value_error(e) or attempt == attempts - 1:
@@ -265,13 +334,30 @@ class OpenAIClient(BaseLLMClient):
             api_key = os.environ.get("OPENROUTER_API_KEY")
             if api_key:
                 llm_kwargs["api_key"] = api_key
+            if (
+                "http_client" not in self.kwargs
+                and "http_async_client" not in self.kwargs
+                and _should_capture_raw_response()
+            ):
+                hc, ahc = _build_http_clients_with_capture()
+                llm_kwargs["http_client"] = hc
+                llm_kwargs["http_async_client"] = ahc
         elif self.provider == "ollama":
             llm_kwargs["base_url"] = "http://localhost:11434/v1"
             llm_kwargs["api_key"] = "ollama"  # Ollama doesn't require auth
         elif self.base_url:
             llm_kwargs["base_url"] = self.base_url
 
-        for key in ("timeout", "max_retries", "reasoning_effort", "api_key", "callbacks", "http_client", "http_async_client"):
+        for key in (
+            "timeout",
+            "max_retries",
+            "max_tokens",
+            "reasoning_effort",
+            "api_key",
+            "callbacks",
+            "http_client",
+            "http_async_client",
+        ):
             if key in self.kwargs:
                 llm_kwargs[key] = self.kwargs[key]
 

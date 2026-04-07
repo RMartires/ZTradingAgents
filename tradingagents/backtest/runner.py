@@ -10,7 +10,15 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 OnDayCompleteCallback = Callable[
-    [str, str, Optional[float], Optional[str]],
+    [
+        str,  # date
+        str,  # signal
+        Optional[float],  # equity (NAV) at close
+        Optional[str],  # error message (empty/None means success)
+        Optional[float],  # close (used for NAV)
+        Optional[float],  # cash after the day
+        Optional[float],  # shares after the day
+    ],
     None,
 ]
 
@@ -54,8 +62,13 @@ def write_backtest_mvp_artifacts(
     complete: bool,
     last_completed_date: Optional[str] = None,
     langfuse_dates_total: Optional[int] = None,
+    write_equity_trades: bool = True,
 ) -> Dict[str, Any]:
-    """Write ``equity.csv``, ``trades.csv``, and ``summary.json`` for current backtest state."""
+    """Write backtest artifacts for current state.
+
+    When ``write_equity_trades`` is True, writes ``equity.csv`` and ``trades.csv``.
+    Always writes ``summary.json``.
+    """
     equities = [float(r["equity"]) for r in equity_rows if r.get("close") is not None]
     if not equities and equity_rows:
         equities = [float(r["equity"]) for r in equity_rows]
@@ -87,57 +100,58 @@ def write_backtest_mvp_artifacts(
     if langfuse_dates_total is not None:
         summary["langfuse_dates_total"] = langfuse_dates_total
 
-    eq_path = base / "equity.csv"
-    with eq_path.open("w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(
-            f,
-            fieldnames=[
-                "date",
-                "signal",
-                "close",
-                "cash",
-                "shares",
-                "equity",
-                "processed_signal",
-            ],
-        )
-        w.writeheader()
-        for row in equity_rows:
-            w.writerow(
-                {
-                    **row,
-                    "close": row["close"] if row["close"] is not None else "",
-                    "processed_signal": row.get("processed_signal", ""),
-                }
+    if write_equity_trades:
+        eq_path = base / "equity.csv"
+        with eq_path.open("w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(
+                f,
+                fieldnames=[
+                    "date",
+                    "signal",
+                    "close",
+                    "cash",
+                    "shares",
+                    "equity",
+                    "processed_signal",
+                ],
             )
+            w.writeheader()
+            for row in equity_rows:
+                w.writerow(
+                    {
+                        **row,
+                        "close": row["close"] if row["close"] is not None else "",
+                        "processed_signal": row.get("processed_signal", ""),
+                    }
+                )
 
-    trades_path = base / "trades.csv"
-    with trades_path.open("w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(
-            f,
-            fieldnames=[
-                "trade_date",
-                "signal",
-                "close_price",
-                "shares_before",
-                "shares_after",
-                "cash_before",
-                "cash_after",
-            ],
-        )
-        w.writeheader()
-        for t in ledger.trades:
-            w.writerow(
-                {
-                    "trade_date": t.trade_date,
-                    "signal": t.signal,
-                    "close_price": t.close_price,
-                    "shares_before": t.shares_before,
-                    "shares_after": t.shares_after,
-                    "cash_before": t.cash_before,
-                    "cash_after": t.cash_after,
-                }
+        trades_path = base / "trades.csv"
+        with trades_path.open("w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(
+                f,
+                fieldnames=[
+                    "trade_date",
+                    "signal",
+                    "close_price",
+                    "shares_before",
+                    "shares_after",
+                    "cash_before",
+                    "cash_after",
+                ],
             )
+            w.writeheader()
+            for t in ledger.trades:
+                w.writerow(
+                    {
+                        "trade_date": t.trade_date,
+                        "signal": t.signal,
+                        "close_price": t.close_price,
+                        "shares_before": t.shares_before,
+                        "shares_after": t.shares_after,
+                        "cash_before": t.cash_before,
+                        "cash_after": t.cash_after,
+                    }
+                )
 
     summary_path = base / "summary.json"
     summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
@@ -157,6 +171,8 @@ def run_backtest_mvp(
     use_live_portfolio: bool = False,
     langfuse_meta: Optional[Dict[str, Any]] = None,
     on_day_complete: Optional[OnDayCompleteCallback] = None,
+    initial_ledger: Optional[PaperLedger] = None,
+    initial_last_close: Optional[float] = None,
     langfuse_dates_total: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
@@ -175,6 +191,8 @@ def run_backtest_mvp(
         langfuse_meta: Optional extras (e.g. llm_provider, quick_think_llm) merged into each
             per-day Langfuse trace input when Langfuse is enabled.
         on_day_complete: Called after each date with ``(date, signal, equity_or_none, error_or_none)``.
+        initial_ledger: Optional starting paper ledger for resume.
+        initial_last_close: Optional starting close used for NAV when a close is missing.
         langfuse_dates_total: Overrides ``dates_total`` in Langfuse trace metadata (e.g. full schedule size).
     """
     ticker = ticker.strip()
@@ -187,9 +205,13 @@ def run_backtest_mvp(
         base = Path(results_dir)
     base.mkdir(parents=True, exist_ok=True)
 
-    ledger = PaperLedger(cash=float(initial_cash))
+    write_equity_trades = on_day_complete is None
+
+    ledger = initial_ledger if initial_ledger is not None else PaperLedger(cash=float(initial_cash))
     equity_rows: List[Dict[str, Any]] = []
-    last_close: Optional[float] = None
+    last_close: Optional[float] = (
+        float(initial_last_close) if initial_last_close is not None else None
+    )
     trace_dates_total = (
         int(langfuse_dates_total) if langfuse_dates_total is not None else len(dates)
     )
@@ -206,6 +228,7 @@ def run_backtest_mvp(
             complete=complete,
             last_completed_date=last_completed,
             langfuse_dates_total=langfuse_dates_total,
+            write_equity_trades=write_equity_trades,
         )
 
     def _propagate_one_day(d: str, day_index: int) -> tuple[Any, Any]:
@@ -317,7 +340,15 @@ def run_backtest_mvp(
                         }
                     )
                     if on_day_complete is not None:
-                        on_day_complete(d, signal, float(nav), None)
+                        on_day_complete(
+                            d,
+                            signal,
+                            float(nav),
+                            f"No close price for {ticker} on {d}",
+                            None,
+                            None,
+                            None,
+                        )
                     _write_snapshot(complete=False, last_completed=d)
                     continue
 
@@ -344,13 +375,21 @@ def run_backtest_mvp(
                     nav,
                 )
                 if on_day_complete is not None:
-                    on_day_complete(d, signal, float(nav), None)
+                    on_day_complete(
+                        d,
+                        signal,
+                        float(nav),
+                        None,
+                        float(close),
+                        float(ledger.cash),
+                        float(ledger.shares),
+                    )
                 _write_snapshot(complete=False, last_completed=d)
             except Exception as e:
                 _log.exception("backtest day failed %s %s", ticker, d)
                 err = f"{type(e).__name__}: {e}"
                 if on_day_complete is not None:
-                    on_day_complete(d, "", None, err)
+                    on_day_complete(d, "", None, err, None, None, None)
                 _write_snapshot(
                     complete=False,
                     last_completed=equity_rows[-1]["date"] if equity_rows else None,

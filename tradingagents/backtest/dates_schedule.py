@@ -7,7 +7,16 @@ import os
 from pathlib import Path
 from typing import Any, List, Mapping, MutableMapping
 
-SCHEDULE_FIELDNAMES = ("date", "processed", "final_signal", "equity", "error")
+SCHEDULE_FIELDNAMES = (
+    "date",
+    "processed",
+    "final_signal",
+    "equity",
+    "error",
+    "close",
+    "cash",
+    "shares",
+)
 
 
 def _cell_str(row: Mapping[str, Any], key: str) -> str:
@@ -24,6 +33,59 @@ def is_row_processed(value: object) -> bool:
     if not s:
         return False
     return s in ("1", "true", "yes", "y")
+
+
+def _parse_float(value: object) -> float | None:
+    if value is None:
+        return None
+    s = str(value).strip()
+    if not s:
+        return None
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
+def last_successful_ledger_state(
+    rows: List[Mapping[str, str]],
+    *,
+    initial_cash: float,
+) -> tuple["PaperLedger", float | None]:
+    """
+    Seed resume state from the last successful row in a state CSV.
+
+    A row is considered successful when:
+    - `processed` is true (see `is_row_processed`)
+    - `error` is empty
+
+    Returns:
+        (ledger, last_close) where last_close can be None when not available.
+    """
+    # Local import to avoid any potential import cycles.
+    from tradingagents.backtest.ledger import PaperLedger
+
+    cash: float | None = None
+    shares: float | None = None
+    last_close: float | None = None
+
+    for r in rows:
+        if not is_row_processed(r.get("processed")):
+            continue
+        if _cell_str(r, "error"):
+            continue
+
+        cash = _parse_float(r.get("cash"))
+        shares = _parse_float(r.get("shares"))
+        last_close = _parse_float(r.get("close"))
+
+    return (
+        PaperLedger(
+            cash=float(initial_cash) if cash is None else float(cash),
+            shares=0.0 if shares is None else float(shares),
+        ),
+        last_close,
+    )
 
 
 def read_dates_schedule(path: Path) -> List[MutableMapping[str, str]]:
@@ -66,6 +128,9 @@ def update_schedule_row(
     final_signal: str = "",
     equity: str = "",
     error: str = "",
+    close: str | None = None,
+    cash: str | None = None,
+    shares: str | None = None,
 ) -> None:
     """Update first row matching ``date`` (strip-compared)."""
     key = date.strip()
@@ -75,6 +140,12 @@ def update_schedule_row(
             r["final_signal"] = final_signal
             r["equity"] = equity
             r["error"] = error
+            if close is not None:
+                r["close"] = close
+            if cash is not None:
+                r["cash"] = cash
+            if shares is not None:
+                r["shares"] = shares
             return
     raise ValueError(f"schedule has no row for date {date!r}")
 

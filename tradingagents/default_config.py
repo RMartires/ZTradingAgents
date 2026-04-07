@@ -21,6 +21,13 @@ DEFAULT_CONFIG = {
     "llm_timeout": None,
     # Max LLM API completions per rolling 60s (all models share one limit). None disables.
     "llm_rate_limit_rpm": None,
+    # Max output tokens per completion for OpenAI-compatible providers.
+    # Use this to stay under upstream provider caps (e.g. OpenRouter providers).
+    "llm_max_tokens": None,
+    # Soft cap on input prompt size (message history) sent to the LLM.
+    # This is enforced in agent nodes by trimming the oldest message content.
+    # Note: this is approximate unless a tokenizer is available.
+    "llm_max_input_tokens": None,
     # Debate and discussion settings
     "max_debate_rounds": 1,
     "max_risk_discuss_rounds": 1,

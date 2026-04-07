@@ -57,13 +57,17 @@ if os.getenv("LLM_TIMEOUT", "").strip():
     config["llm_timeout"] = float(os.getenv("LLM_TIMEOUT", "600"))
 if os.getenv("LLM_RATE_LIMIT_RPM", "").strip():
     config["llm_rate_limit_rpm"] = float(os.getenv("LLM_RATE_LIMIT_RPM", "0"))
+if os.getenv("LLM_MAX_TOKENS", "").strip():
+    config["llm_max_tokens"] = int(os.getenv("LLM_MAX_TOKENS", "8192"))
+if os.getenv("LLM_MAX_INPUT_TOKENS", "").strip():
+    config["llm_max_input_tokens"] = int(os.getenv("LLM_MAX_INPUT_TOKENS", "0"))
 
 # Configure data vendors (default uses yfinance, no extra API keys needed)
 config["data_vendors"] = {
-    "core_stock_apis": "kite",
-    "technical_indicators": "kite",
-    "fundamental_data": "yfinance",
-    "news_data": "yfinance",
+    "core_stock_apis": "alpha_vantage",
+    "technical_indicators": "alpha_vantage",
+    "fundamental_data": "alpha_vantage",
+    "news_data": "alpha_vantage",
 }
 
 # Create stats callback handler for tracking LLM/tool calls
@@ -75,8 +79,8 @@ root_span = None
 trace_cm = None
 propagate_cm = None
 
-TICKER = "RELIANCE"
-TRADE_DATE = "2024-05-10"
+TICKER = "NVDA"
+TRADE_DATE = "2024-05-22"
 
 if langfuse_client is not None:
     from langfuse import propagate_attributes

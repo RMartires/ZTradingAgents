@@ -8,6 +8,7 @@ from tradingagents.backtest.dates_schedule import (
     read_dates_schedule,
     update_schedule_row,
     write_dates_schedule_atomic,
+    last_successful_ledger_state,
 )
 from tradingagents.backtest.ledger import PaperLedger
 from tradingagents.backtest.prices import parse_close_from_vendor_block
@@ -113,6 +114,80 @@ class TestDatesSchedule(unittest.TestCase):
             again = read_dates_schedule(p)
             self.assertEqual(pending_schedule_dates(again), [])
 
+    def test_pending_after_error_when_unprocessed(self):
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "d.csv"
+            rows = [
+                {
+                    "date": "2024-05-01",
+                    "processed": "",
+                    "final_signal": "",
+                    "equity": "",
+                    "error": "BadRequestError: Provider returned error",
+                }
+            ]
+            write_dates_schedule_atomic(p, rows)
+            loaded = read_dates_schedule(p)
+            self.assertEqual(pending_schedule_dates(loaded), ["2024-05-01"])
+
+
+class TestStateCSVResumeSeeding(unittest.TestCase):
+    def test_last_successful_ledger_state(self):
+        rows = [
+            {
+                "date": "2024-05-01",
+                "processed": "true",
+                "error": "",
+                "cash": "1000",
+                "shares": "2",
+                "close": "50",
+            },
+            {
+                "date": "2024-05-02",
+                "processed": "true",
+                "error": "BadRequestError: something went wrong",
+                "cash": "2000",
+                "shares": "3",
+                "close": "60",
+            },
+            {
+                "date": "2024-05-03",
+                "processed": "",
+                "error": "",
+                "cash": "3000",
+                "shares": "4",
+                "close": "70",
+            },
+        ]
+
+        ledger, last_close = last_successful_ledger_state(
+            rows,
+            initial_cash=9999.0,
+        )
+
+        self.assertAlmostEqual(ledger.cash, 1000.0)
+        self.assertAlmostEqual(ledger.shares, 2.0)
+        self.assertAlmostEqual(last_close or 0.0, 50.0)
+
+    def test_last_successful_defaults_when_missing(self):
+        rows = [
+            {
+                "date": "2024-05-01",
+                "processed": "true",
+                "error": "",
+                "cash": "",
+                "shares": "",
+                "close": "",
+            }
+        ]
+        ledger, last_close = last_successful_ledger_state(
+            rows,
+            initial_cash=1234.0,
+        )
+        self.assertAlmostEqual(ledger.cash, 1234.0)
+        self.assertAlmostEqual(ledger.shares, 0.0)
+        self.assertIsNone(last_close)
+
 
 class TestWriteBacktestMvpArtifacts(unittest.TestCase):
     def test_writes_summary_status(self):
@@ -147,6 +222,38 @@ class TestWriteBacktestMvpArtifacts(unittest.TestCase):
             self.assertEqual(data["last_completed_date"], "2024-01-01")
             self.assertTrue((base / "equity.csv").is_file())
             self.assertTrue((base / "trades.csv").is_file())
+
+    def test_write_equity_trades_off(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            ledger = PaperLedger(cash=100_000.0)
+            rows = [
+                {
+                    "date": "2024-01-01",
+                    "signal": "HOLD",
+                    "close": 10.0,
+                    "cash": 100_000.0,
+                    "shares": 0.0,
+                    "equity": 100_000.0,
+                    "processed_signal": "",
+                }
+            ]
+            s = write_backtest_mvp_artifacts(
+                base,
+                "TEST",
+                "runid",
+                100_000.0,
+                2,
+                rows,
+                ledger,
+                complete=False,
+                last_completed="2024-01-01",
+                write_equity_trades=False,
+            )
+            self.assertEqual(s["status"], "running")
+            self.assertTrue((base / "summary.json").is_file())
+            self.assertFalse((base / "equity.csv").exists())
+            self.assertFalse((base / "trades.csv").exists())
 
 
 class TestPaperLedger(unittest.TestCase):

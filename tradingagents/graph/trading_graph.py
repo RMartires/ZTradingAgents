@@ -159,6 +159,8 @@ class TradingAgentsGraph:
             kwargs["max_retries"] = int(self.config["llm_max_retries"])
         if self.config.get("llm_timeout") is not None:
             kwargs["timeout"] = float(self.config["llm_timeout"])
+        if self.config.get("llm_max_tokens") is not None:
+            kwargs["max_tokens"] = int(self.config["llm_max_tokens"])
 
         return kwargs
 

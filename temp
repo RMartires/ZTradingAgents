@@ -1,9 +1,8 @@
 python main.py 2>&1 | tee "run-$(date +%Y%m%d-%H%M%S).log"
 
-python scripts/kite_token_server.py // auth server
+python scripts/kite_token_server.py
 
-PYTHONUNBUFFERED=1 python -u scripts/backtest_mvp.py \
+PYTHONUNBUFFERED=1 python3 -u scripts/backtest_mvp.py \
   --ticker RELIANCE.NS \
   --dates-csv eval_results/RELIANCE.NS/dates.csv \
-  --dates 2024-05-03,2024-05-06,2024-05-07,2024-05-08,2024-05-09,2024-05-10 \
   --debug 2>&1 | tee eval_results/backtest_mvp_run.log

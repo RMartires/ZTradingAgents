@@ -3,8 +3,10 @@
 MVP historical backtest: run TradingAgentsGraph per date (no live portfolio),
 execute paper trades at close, write eval_results/<ticker>/backtest_mvp_<id>/.
 
-After each date, equity.csv, trades.csv, summary.json are refreshed. Optional ``--dates-csv``
-tracks progress: columns date, processed, final_signal, equity, error (atomic rewrites).
+For one-off runs (no ``--dates-csv``), `equity.csv`, `trades.csv`, and `summary.json` are refreshed.
+When ``--dates-csv`` is provided, the schedule CSV becomes the source of truth for progress and portfolio state:
+columns `date`, `processed`, `final_signal`, `close`, `cash`, `shares`, `equity`, `error` (atomic rewrites).
+In this mode, the per-run output folder only updates `summary.json`.
 
 Usage (from repo root):
   .venv/bin/python scripts/backtest_mvp.py --ticker RELIANCE --dates 2024-05-03,2024-05-10
@@ -31,6 +33,7 @@ from tradingagents.backtest.dates_schedule import (
     read_dates_schedule,
     update_schedule_row,
     write_dates_schedule_atomic,
+    last_successful_ledger_state,
 )
 from tradingagents.observability.langfuse_config import get_langfuse_client, get_langfuse_handler
 
@@ -84,6 +87,17 @@ def _build_config() -> dict:
         cfg["llm_timeout"] = float(os.getenv("LLM_TIMEOUT", "600"))
     if os.getenv("LLM_RATE_LIMIT_RPM", "").strip():
         cfg["llm_rate_limit_rpm"] = float(os.getenv("LLM_RATE_LIMIT_RPM", "0"))
+    if os.getenv("LLM_MAX_TOKENS", "").strip():
+        cfg["llm_max_tokens"] = int(os.getenv("LLM_MAX_TOKENS", "8192"))
+
+    # Configure data vendors (default uses yfinance, no extra API keys needed)
+    cfg["data_vendors"] = {
+        "core_stock_apis": "kite",
+        "technical_indicators": "kite",
+        "fundamental_data": "yfinance",
+        "news_data": "alpha_vantage",
+    }
+
     return cfg
 
 
@@ -135,6 +149,9 @@ def main() -> int:
     schedule_rows: list[dict[str, str]] | None = None
     schedule_path: Path | None = None
     langfuse_dates_total: int | None = None
+    seed_ledger = None
+    seed_last_close: float | None = None
+    effective_initial_cash = args.initial_cash
 
     if args.dates_csv.strip():
         schedule_path = Path(args.dates_csv.strip())
@@ -176,6 +193,13 @@ def main() -> int:
             )
             return 2
 
+    if schedule_rows is not None and schedule_path is not None:
+        seed_ledger, seed_last_close = last_successful_ledger_state(
+            schedule_rows,
+            initial_cash=args.initial_cash,
+        )
+        effective_initial_cash = float(seed_ledger.cash)
+
     from tradingagents.backtest.runner import run_backtest_mvp
     from tradingagents.graph.trading_graph import TradingAgentsGraph
 
@@ -203,18 +227,29 @@ def main() -> int:
         signal: str,
         equity: float | None,
         error: str | None,
+        close: float | None,
+        cash: float | None,
+        shares: float | None,
     ) -> None:
         if schedule_path is None or schedule_rows is None:
             return
         eq_s = f"{equity:.6f}" if equity is not None else ""
+        err_s = (error or "").strip()
+        processed = err_s == ""
+        close_s = f"{close:.6f}" if close is not None else ""
+        cash_s = f"{cash:.6f}" if cash is not None else ""
+        shares_s = f"{shares:.6f}" if shares is not None else ""
         try:
             update_schedule_row(
                 schedule_rows,
                 date,
-                processed=True,
+                processed=processed,
                 final_signal=signal,
                 equity=eq_s,
-                error=(error or "").strip(),
+                error=err_s,
+                close=close_s,
+                cash=cash_s,
+                shares=shares_s,
             )
             write_dates_schedule_atomic(schedule_path, schedule_rows)
         except ValueError as e:
@@ -224,13 +259,15 @@ def main() -> int:
         graph,
         ticker,
         dates,
-        initial_cash=args.initial_cash,
+        initial_cash=effective_initial_cash,
         buy_fraction=args.buy_fraction,
         use_llm_signal=args.use_llm_signal,
         results_dir=Path(args.results_dir) if args.results_dir else None,
         use_live_portfolio=False,
         langfuse_meta=langfuse_meta,
         on_day_complete=_on_day_complete if schedule_path is not None else None,
+        initial_ledger=seed_ledger if schedule_path is not None else None,
+        initial_last_close=seed_last_close if schedule_path is not None else None,
         langfuse_dates_total=langfuse_dates_total,
     )
     s = out["summary"]

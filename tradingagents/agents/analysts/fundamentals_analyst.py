@@ -1,7 +1,14 @@
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 import time
 import json
-from tradingagents.agents.utils.agent_utils import get_fundamentals, get_balance_sheet, get_cashflow, get_income_statement, get_insider_transactions
+from tradingagents.agents.utils.agent_utils import (
+    get_fundamentals,
+    get_balance_sheet,
+    get_cashflow,
+    get_income_statement,
+    get_insider_transactions,
+    limit_messages_for_llm_context,
+)
 from tradingagents.dataflows.config import get_config
 
 
@@ -56,7 +63,8 @@ def create_fundamentals_analyst(llm):
 
         chain = prompt | llm.bind_tools(tools)
 
-        result = chain.invoke(state["messages"])
+        messages = limit_messages_for_llm_context(state["messages"])
+        result = chain.invoke(messages)
 
         report = ""
 
