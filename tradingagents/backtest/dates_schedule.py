@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 from typing import Any, List, Mapping, MutableMapping
 
-SCHEDULE_FIELDNAMES = (
+SCHEDULE_CORE_FIELDNAMES = (
     "date",
     "processed",
     "final_signal",
@@ -17,6 +17,26 @@ SCHEDULE_FIELDNAMES = (
     "cash",
     "shares",
 )
+
+# Per-day book + running backtest stats (updated on each successful day; cleared on error rows).
+SCHEDULE_ANALYSIS_FIELDNAMES = (
+    "fees_day",
+    "cumulative_fees",
+    "total_return",
+    "annualized_return",
+    "sharpe_ratio",
+    "max_drawdown",
+    "total_transaction_costs",
+    "cost_bps",
+    "processed_signal",
+)
+
+SCHEDULE_FIELDNAMES = SCHEDULE_CORE_FIELDNAMES + SCHEDULE_ANALYSIS_FIELDNAMES
+
+
+def empty_schedule_analysis_values() -> dict[str, str]:
+    """Blank strings for all analysis columns (e.g. failed or skipped days)."""
+    return {k: "" for k in SCHEDULE_ANALYSIS_FIELDNAMES}
 
 
 def _cell_str(row: Mapping[str, Any], key: str) -> str:
@@ -51,6 +71,7 @@ def last_successful_ledger_state(
     rows: List[Mapping[str, str]],
     *,
     initial_cash: float,
+    cost_bps: float = 0.0,
 ) -> tuple["PaperLedger", float | None]:
     """
     Seed resume state from the last successful row in a state CSV.
@@ -83,6 +104,7 @@ def last_successful_ledger_state(
         PaperLedger(
             cash=float(initial_cash) if cash is None else float(cash),
             shares=0.0 if shares is None else float(shares),
+            cost_bps=float(cost_bps),
         ),
         last_close,
     )
@@ -131,8 +153,14 @@ def update_schedule_row(
     close: str | None = None,
     cash: str | None = None,
     shares: str | None = None,
+    analysis: Mapping[str, str] | None = None,
 ) -> None:
-    """Update first row matching ``date`` (strip-compared)."""
+    """Update first row matching ``date`` (strip-compared).
+
+    ``analysis`` maps optional keys in ``SCHEDULE_ANALYSIS_FIELDNAMES`` (running metrics as strings).
+    If ``analysis`` is ``None``, analysis columns are left unchanged. If provided, every key in
+    ``SCHEDULE_ANALYSIS_FIELDNAMES`` is written (pass :func:`empty_schedule_analysis_values` to clear).
+    """
     key = date.strip()
     for r in rows:
         if _cell_str(r, "date") == key:
@@ -146,6 +174,9 @@ def update_schedule_row(
                 r["cash"] = cash
             if shares is not None:
                 r["shares"] = shares
+            if analysis is not None:
+                for k in SCHEDULE_ANALYSIS_FIELDNAMES:
+                    r[k] = _cell_str(analysis, k)
             return
     raise ValueError(f"schedule has no row for date {date!r}")
 

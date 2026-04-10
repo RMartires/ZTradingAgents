@@ -44,4 +44,6 @@ DEFAULT_CONFIG = {
     "tool_vendors": {
         # Example: "get_stock_data": "alpha_vantage",  # Override category default
     },
+    # Paper backtest: transaction cost as basis points of traded notional per BUY/SELL (0 = off).
+    "backtest_cost_bps": float(os.getenv("BACKTEST_COST_BPS", "0") or 0),
 }

@@ -110,6 +110,10 @@ def get_global_news_yfinance(
     """
     Retrieve global/macro economic news using yfinance Search.
 
+    Only articles whose publish time falls in
+    [curr_date - look_back_days, curr_date] (inclusive, calendar-day aligned
+    like ``get_news_yfinance``) are included so backtests do not leak future headlines.
+
     Args:
         curr_date: Current date in yyyy-mm-dd format
         look_back_days: Number of days to look back
@@ -126,8 +130,13 @@ def get_global_news_yfinance(
         "global markets trading",
     ]
 
-    all_news = []
-    seen_titles = set()
+    all_news: list = []
+    seen_titles: set[str] = set()
+
+    curr_dt = datetime.strptime(curr_date, "%Y-%m-%d")
+    start_dt = curr_dt - relativedelta(days=look_back_days)
+    start_date = start_dt.strftime("%Y-%m-%d")
+    end_dt = curr_dt
 
     try:
         for query in search_queries:
@@ -151,31 +160,41 @@ def get_global_news_yfinance(
                         seen_titles.add(title)
                         all_news.append(article)
 
-            if len(all_news) >= limit:
+            if len(all_news) >= limit * 4:
                 break
 
         if not all_news:
             return f"No global news found for {curr_date}"
 
-        # Calculate date range
-        curr_dt = datetime.strptime(curr_date, "%Y-%m-%d")
-        start_dt = curr_dt - relativedelta(days=look_back_days)
-        start_date = start_dt.strftime("%Y-%m-%d")
+        filtered: list = []
+        for article in all_news:
+            data = _extract_article_data(article) if "content" in article else None
+            if data is None:
+                data = {
+                    "title": article.get("title", "No title"),
+                    "summary": article.get("summary", ""),
+                    "publisher": article.get("publisher", "Unknown"),
+                    "link": article.get("link", ""),
+                    "pub_date": None,
+                }
+            if data["pub_date"]:
+                pub_naive = data["pub_date"].replace(tzinfo=None)
+                if not (start_dt <= pub_naive <= end_dt + relativedelta(days=1)):
+                    continue
+            filtered.append((article, data))
+
+        if not filtered:
+            return (
+                f"No global news found between {start_date} and {curr_date} "
+                f"(search returned {len(all_news)} item(s) outside the date window)"
+            )
 
         news_str = ""
-        for article in all_news[:limit]:
-            # Handle both flat and nested structures
-            if "content" in article:
-                data = _extract_article_data(article)
-                title = data["title"]
-                publisher = data["publisher"]
-                link = data["link"]
-                summary = data["summary"]
-            else:
-                title = article.get("title", "No title")
-                publisher = article.get("publisher", "Unknown")
-                link = article.get("link", "")
-                summary = ""
+        for _, data in filtered[:limit]:
+            title = data["title"]
+            publisher = data["publisher"]
+            link = data["link"]
+            summary = data["summary"]
 
             news_str += f"### {title} (source: {publisher})\n"
             if summary:

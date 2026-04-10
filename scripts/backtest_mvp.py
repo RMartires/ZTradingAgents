@@ -31,6 +31,7 @@ if str(ROOT) not in sys.path:
 
 from cli.stats_handler import StatsCallbackHandler
 from tradingagents.backtest.dates_schedule import (
+    empty_schedule_analysis_values,
     is_row_processed,
     last_successful_ledger_state,
     pending_schedule_dates,
@@ -157,6 +158,7 @@ def _mark_weekend_rows_skipped(
             close="",
             cash="",
             shares="",
+            analysis=empty_schedule_analysis_values(),
         )
         changed = True
     if changed:
@@ -183,6 +185,12 @@ def main() -> int:
     )
     parser.add_argument("--initial-cash", type=float, default=100_000.0)
     parser.add_argument("--buy-fraction", type=float, default=1.0)
+    parser.add_argument(
+        "--cost-bps",
+        type=float,
+        default=None,
+        help="Transaction cost in bps of notional per BUY/SELL (overrides BACKTEST_COST_BPS / config)",
+    )
     parser.add_argument("--use-llm-signal", action="store_true", help="Use SignalProcessor when heuristic fails")
     parser.add_argument("--debug", action="store_true", help="LangGraph debug stream (verbose)")
     parser.add_argument("--results-dir", default="", help="Override output directory base")
@@ -217,6 +225,7 @@ def main() -> int:
                     "final_signal": "",
                     "equity": "",
                     "error": "",
+                    **empty_schedule_analysis_values(),
                 }
                 for d in bootstrap_dates
             ]
@@ -254,17 +263,22 @@ def main() -> int:
                 )
             return 2
 
+    config = _build_config()
+    cost_bps = float(config.get("backtest_cost_bps", 0) or 0)
+    if args.cost_bps is not None:
+        cost_bps = float(args.cost_bps)
+
     if schedule_rows is not None and schedule_path is not None:
         seed_ledger, seed_last_close = last_successful_ledger_state(
             schedule_rows,
             initial_cash=args.initial_cash,
+            cost_bps=cost_bps,
         )
         effective_initial_cash = float(seed_ledger.cash)
 
     from tradingagents.backtest.runner import run_backtest_mvp
     from tradingagents.graph.trading_graph import TradingAgentsGraph
 
-    config = _build_config()
     stats_handler = StatsCallbackHandler()
     langfuse_handler = None
     if get_langfuse_client() is not None:
@@ -291,6 +305,7 @@ def main() -> int:
         close: float | None,
         cash: float | None,
         shares: float | None,
+        analysis: dict[str, str] | None = None,
     ) -> None:
         if schedule_path is None or schedule_rows is None:
             return
@@ -300,6 +315,8 @@ def main() -> int:
         close_s = f"{close:.6f}" if close is not None else ""
         cash_s = f"{cash:.6f}" if cash is not None else ""
         shares_s = f"{shares:.6f}" if shares is not None else ""
+        if analysis is None:
+            analysis = empty_schedule_analysis_values()
         try:
             update_schedule_row(
                 schedule_rows,
@@ -311,6 +328,7 @@ def main() -> int:
                 close=close_s,
                 cash=cash_s,
                 shares=shares_s,
+                analysis=analysis,
             )
             write_dates_schedule_atomic(schedule_path, schedule_rows)
         except ValueError as e:
@@ -322,6 +340,7 @@ def main() -> int:
         dates,
         initial_cash=effective_initial_cash,
         buy_fraction=args.buy_fraction,
+        cost_bps=cost_bps,
         use_llm_signal=args.use_llm_signal,
         results_dir=Path(args.results_dir) if args.results_dir else None,
         use_live_portfolio=False,
@@ -332,10 +351,19 @@ def main() -> int:
         langfuse_dates_total=langfuse_dates_total,
     )
     s = out["summary"]
+    ann = s.get("annualized_return")
+    sh = s.get("sharpe_ratio")
+    ann_s = f"{ann:.4f}" if ann is not None else "n/a"
+    sh_s = f"{sh:.4f}" if sh is not None else "n/a"
     logging.info(
-        "Done. total_return=%.4f max_drawdown=%.4f final_equity=%.2f -> %s",
+        "Done. total_return=%.4f ann_return=%s sharpe=%s max_drawdown=%.4f "
+        "cost_bps=%s total_fees=%.2f final_equity=%.2f -> %s",
         s["total_return"],
+        ann_s,
+        sh_s,
         s["max_drawdown"],
+        s.get("cost_bps", 0),
+        s.get("total_transaction_costs", 0.0),
         s["final_equity"],
         s["output_dir"],
     )
