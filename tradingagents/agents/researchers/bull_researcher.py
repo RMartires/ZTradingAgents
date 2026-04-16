@@ -1,9 +1,14 @@
-from langchain_core.messages import AIMessage
 import time
 import json
 
+from tradingagents.backtest.structured_literals import model_dump_json_with_recovery
+from tradingagents.llm_clients.invoke_fallback import (
+    invoke_structured_prompt_or_plain,
+)
+from tradingagents.schemas import BullBearArgument
 
-def create_bull_researcher(llm, memory):
+
+def create_bull_researcher(llm, memory, fallback_llm=None):
     def bull_node(state) -> dict:
         investment_debate_state = state["investment_debate_state"]
         history = investment_debate_state.get("history", "")
@@ -49,9 +54,19 @@ Reflections from similar situations and lessons learned: {past_memory_str}
 Use this information to deliver a compelling bull argument, refute the bear's concerns, and engage in a dynamic debate that demonstrates the strengths of the bull position. You must also address reflections and learn from lessons and mistakes you made in the past.
 """
 
-        response = llm.invoke(prompt)
+        structured, plain_fallback = invoke_structured_prompt_or_plain(
+            llm,
+            prompt,
+            BullBearArgument,
+            build_from_text=lambda t: BullBearArgument(
+                analysis=(t.strip() or "(structured output unavailable)"),
+                implied_stance="neutral",
+            ),
+            fallback_llm=fallback_llm,
+            context="Bull researcher",
+        )
 
-        argument = f"Bull Analyst: {response.content}"
+        argument = f"Bull Analyst: {structured.analysis}"
 
         new_investment_debate_state = {
             "history": history + "\n" + argument,
@@ -59,7 +74,13 @@ Use this information to deliver a compelling bull argument, refute the bear's co
             "bear_history": investment_debate_state.get("bear_history", ""),
             "current_response": argument,
             "count": investment_debate_state["count"] + 1,
+            "judge_decision": investment_debate_state.get("judge_decision", ""),
+            "bull_structured": model_dump_json_with_recovery(structured, plain_fallback),
         }
+        if "bear_structured" in investment_debate_state:
+            new_investment_debate_state["bear_structured"] = investment_debate_state[
+                "bear_structured"
+            ]
 
         return {"investment_debate_state": new_investment_debate_state}
 

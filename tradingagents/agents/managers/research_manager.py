@@ -1,7 +1,11 @@
 import time
 import json
 
-from tradingagents.llm_clients.invoke_fallback import invoke_chat_with_deep_fallback
+from tradingagents.backtest.structured_literals import model_dump_json_with_recovery
+from tradingagents.llm_clients.invoke_fallback import (
+    invoke_structured_prompt_or_plain,
+)
+from tradingagents.schemas import InvestmentPlanJudgment
 
 
 def create_research_manager(llm, memory, fallback_llm=None):
@@ -38,25 +42,46 @@ Here are your past reflections on mistakes:
 Here is the debate:
 Debate History:
 {history}"""
-        response = invoke_chat_with_deep_fallback(
+        structured, plain_fallback = invoke_structured_prompt_or_plain(
             llm,
             prompt,
+            InvestmentPlanJudgment,
+            build_from_text=lambda t: InvestmentPlanJudgment(
+                recommendation="Hold",
+                rationale="",
+                strategic_actions="",
+                narrative=(t.strip() or "Structured plan unavailable."),
+            ),
             fallback_llm=fallback_llm,
             context="Research Manager",
         )
+        content = structured.narrative.strip() or (
+            f"Recommendation: {structured.recommendation}. {structured.rationale} {structured.strategic_actions}"
+        )
 
         new_investment_debate_state = {
-            "judge_decision": response.content,
+            "judge_decision": content,
             "history": investment_debate_state.get("history", ""),
             "bear_history": investment_debate_state.get("bear_history", ""),
             "bull_history": investment_debate_state.get("bull_history", ""),
-            "current_response": response.content,
+            "current_response": content,
             "count": investment_debate_state["count"],
         }
+        if "bull_structured" in investment_debate_state:
+            new_investment_debate_state["bull_structured"] = investment_debate_state[
+                "bull_structured"
+            ]
+        if "bear_structured" in investment_debate_state:
+            new_investment_debate_state["bear_structured"] = investment_debate_state[
+                "bear_structured"
+            ]
 
         return {
             "investment_debate_state": new_investment_debate_state,
-            "investment_plan": response.content,
+            "investment_plan": content,
+            "investment_plan_structured": model_dump_json_with_recovery(
+                structured, plain_fallback
+            ),
         }
 
     return research_manager_node

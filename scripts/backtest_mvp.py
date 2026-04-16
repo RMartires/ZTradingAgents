@@ -93,6 +93,16 @@ def _build_config() -> dict:
         cfg["llm_rate_limit_rpm"] = float(os.getenv("LLM_RATE_LIMIT_RPM", "0"))
     if os.getenv("LLM_MAX_TOKENS", "").strip():
         cfg["llm_max_tokens"] = int(os.getenv("LLM_MAX_TOKENS", "8192"))
+    # Optional: LLM_STRUCTURED_TEMPERATURE — schemas.outputs structured invokes only (invoke_fallback).
+
+    # Paper backtest: basis points per BUY/SELL notional. Re-read from env here so ``.env``
+    # (loaded in ``main()`` before this runs) wins over ``DEFAULT_CONFIG`` frozen at import.
+    _bc = os.getenv("BACKTEST_COST_BPS", "").strip()
+    if _bc != "":
+        try:
+            cfg["backtest_cost_bps"] = float(_bc)
+        except ValueError:
+            pass
 
     # Configure data vendors (default uses yfinance, no extra API keys needed)
     cfg["data_vendors"] = {

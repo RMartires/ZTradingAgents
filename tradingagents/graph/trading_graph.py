@@ -42,6 +42,7 @@ from .setup import GraphSetup
 from .propagation import Propagator
 from .reflection import Reflector
 from .signal_processing import SignalProcessor
+from tradingagents.schemas import RiskAssessment
 
 
 class TradingAgentsGraph:
@@ -256,8 +257,18 @@ class TradingAgentsGraph:
         # Log state
         self._log_state(trade_date, final_state)
 
-        # Return decision and processed signal
-        return final_state, self.process_signal(final_state["final_trade_decision"])
+        # Return decision and processed signal (prefer structured risk assessment when present)
+        processed = self.process_signal(final_state["final_trade_decision"])
+        raw_struct = final_state.get("final_trade_decision_structured")
+        if raw_struct:
+            try:
+                ra = RiskAssessment.model_validate_json(raw_struct)
+                tok = ra.decision.upper()
+                if tok in ("BUY", "SELL", "HOLD"):
+                    processed = tok
+            except Exception:
+                pass
+        return final_state, processed
 
     def _fetch_portfolio_context(self) -> str:
         """

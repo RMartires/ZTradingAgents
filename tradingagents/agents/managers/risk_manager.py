@@ -1,7 +1,11 @@
 import time
 import json
 
-from tradingagents.llm_clients.invoke_fallback import invoke_chat_with_deep_fallback
+from tradingagents.backtest.structured_literals import model_dump_json_with_recovery
+from tradingagents.llm_clients.invoke_fallback import (
+    invoke_structured_prompt_or_plain,
+)
+from tradingagents.schemas import RiskAssessment, append_final_tx_line_if_missing
 
 
 def create_risk_manager(llm, memory, fallback_llm=None):
@@ -53,15 +57,26 @@ Deliverables:
 
 Focus on actionable insights and continuous improvement. Build on past lessons, critically evaluate all perspectives, and ensure each decision advances better outcomes."""
 
-        response = invoke_chat_with_deep_fallback(
+        structured, plain_fallback = invoke_structured_prompt_or_plain(
             llm,
             prompt,
+            RiskAssessment,
+            build_from_text=lambda t: RiskAssessment(
+                decision="Hold",
+                rationale="",
+                narrative=(
+                    t.strip()
+                    or "FINAL TRANSACTION PROPOSAL: **HOLD**"
+                ),
+            ),
             fallback_llm=fallback_llm,
             context="Risk Manager",
         )
+        token = structured.decision.upper()
+        content = append_final_tx_line_if_missing(structured.narrative, token)
 
         new_risk_debate_state = {
-            "judge_decision": response.content,
+            "judge_decision": content,
             "history": risk_debate_state["history"],
             "aggressive_history": risk_debate_state["aggressive_history"],
             "conservative_history": risk_debate_state["conservative_history"],
@@ -72,10 +87,16 @@ Focus on actionable insights and continuous improvement. Build on past lessons, 
             "current_neutral_response": risk_debate_state["current_neutral_response"],
             "count": risk_debate_state["count"],
         }
+        for k in ("aggressive_structured", "conservative_structured", "neutral_structured"):
+            if k in risk_debate_state:
+                new_risk_debate_state[k] = risk_debate_state[k]
 
         return {
             "risk_debate_state": new_risk_debate_state,
-            "final_trade_decision": response.content,
+            "final_trade_decision": content,
+            "final_trade_decision_structured": model_dump_json_with_recovery(
+                structured, plain_fallback
+            ),
         }
 
     return risk_manager_node

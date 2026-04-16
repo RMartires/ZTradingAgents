@@ -7,6 +7,7 @@ from tradingagents.agents.utils.agent_utils import (
     limit_messages_for_llm_context,
 )
 from tradingagents.dataflows.config import get_config
+from tradingagents.agents.utils.analyst_structured import analyst_report_json_for_state
 
 
 def create_market_analyst(llm):
@@ -90,9 +91,12 @@ Volume-Based Indicators:
         if len(result.tool_calls) == 0:
             report = result.content
 
-        return {
+        out = {
             "messages": [result],
             "market_report": report,
         }
+        if report.strip():
+            out["market_report_structured"] = analyst_report_json_for_state(llm, report)
+        return out
 
     return market_analyst_node

@@ -1,8 +1,14 @@
 import time
 import json
 
+from tradingagents.backtest.structured_literals import model_dump_json_with_recovery
+from tradingagents.llm_clients.invoke_fallback import (
+    invoke_structured_prompt_or_plain,
+)
+from tradingagents.schemas import RiskAnalystArgument
 
-def create_neutral_debator(llm):
+
+def create_neutral_debator(llm, fallback_llm=None):
     def neutral_node(state) -> dict:
         risk_debate_state = state["risk_debate_state"]
         history = risk_debate_state.get("history", "")
@@ -32,9 +38,19 @@ Here is the current conversation history: {history} Here is the last response fr
 
 Engage actively by analyzing both sides critically, addressing weaknesses in the aggressive and conservative arguments to advocate for a more balanced approach. Challenge each of their points to illustrate why a moderate risk strategy might offer the best of both worlds, providing growth potential while safeguarding against extreme volatility. Focus on debating rather than simply presenting data, aiming to show that a balanced view can lead to the most reliable outcomes. Output conversationally as if you are speaking without any special formatting."""
 
-        response = llm.invoke(prompt)
+        structured, plain_fallback = invoke_structured_prompt_or_plain(
+            llm,
+            prompt,
+            RiskAnalystArgument,
+            build_from_text=lambda t: RiskAnalystArgument(
+                analysis=(t.strip() or "(structured output unavailable)"),
+                risk_posture="moderate",
+            ),
+            fallback_llm=fallback_llm,
+            context="Neutral risk",
+        )
 
-        argument = f"Neutral Analyst: {response.content}"
+        argument = f"Neutral Analyst: {structured.analysis}"
 
         new_risk_debate_state = {
             "history": history + "\n" + argument,
@@ -48,7 +64,12 @@ Engage actively by analyzing both sides critically, addressing weaknesses in the
             "current_conservative_response": risk_debate_state.get("current_conservative_response", ""),
             "current_neutral_response": argument,
             "count": risk_debate_state["count"] + 1,
+            "judge_decision": risk_debate_state.get("judge_decision", ""),
+            "neutral_structured": model_dump_json_with_recovery(structured, plain_fallback),
         }
+        for k in ("aggressive_structured", "conservative_structured"):
+            if k in risk_debate_state:
+                new_risk_debate_state[k] = risk_debate_state[k]
 
         return {"risk_debate_state": new_risk_debate_state}
 

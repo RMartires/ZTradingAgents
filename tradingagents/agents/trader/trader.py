@@ -2,8 +2,16 @@ import functools
 import time
 import json
 
+from langchain_core.messages import AIMessage
 
-def create_trader(llm, memory):
+from tradingagents.backtest.structured_literals import model_dump_json_with_recovery
+from tradingagents.llm_clients.invoke_fallback import (
+    invoke_structured_messages_or_plain,
+)
+from tradingagents.schemas import TradeProposal, append_final_tx_line_if_missing
+
+
+def create_trader(llm, memory, fallback_llm=None):
     def trader_node(state, name):
         company_name = state["company_of_interest"]
         investment_plan = state["investment_plan"]
@@ -41,11 +49,27 @@ def create_trader(llm, memory):
             context,
         ]
 
-        result = llm.invoke(messages)
-
+        structured, plain_fallback = invoke_structured_messages_or_plain(
+            llm,
+            messages,
+            TradeProposal,
+            build_from_text=lambda t: TradeProposal(
+                decision="HOLD",
+                rationale="",
+                narrative=(t.strip() or "FINAL TRANSACTION PROPOSAL: **HOLD**"),
+            ),
+            fallback_llm=fallback_llm,
+            context="Trader",
+        )
+        narrative = append_final_tx_line_if_missing(
+            structured.narrative, structured.decision
+        )
         return {
-            "messages": [result],
-            "trader_investment_plan": result.content,
+            "messages": [AIMessage(content=narrative)],
+            "trader_investment_plan": narrative,
+            "trader_investment_plan_structured": model_dump_json_with_recovery(
+                structured, plain_fallback
+            ),
             "sender": name,
         }
 

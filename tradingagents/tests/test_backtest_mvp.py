@@ -44,6 +44,11 @@ class TestResolveSignal(unittest.TestCase):
             "SELL",
         )
 
+    def test_processed_wins_over_heuristic_when_both_present(self):
+        """``processed`` (SignalProcessor) is authoritative vs last BUY/SELL/HOLD in debate text."""
+        messy = "Bull: BUY. Bear: SELL. Last word BUY."
+        self.assertEqual(resolve_signal(messy, processed="HOLD"), "HOLD")
+
     def test_default_hold(self):
         self.assertEqual(resolve_signal("nothing"), "HOLD")
 

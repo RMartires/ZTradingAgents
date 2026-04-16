@@ -18,6 +18,22 @@ SCHEDULE_CORE_FIELDNAMES = (
     "shares",
 )
 
+# Literal scalars from Pydantic structured outputs (one token per column; see ``structured_literals``).
+SCHEDULE_STRUCTURED_LITERAL_FIELDNAMES = (
+    "market_outlook",
+    "sentiment_outlook",
+    "news_outlook",
+    "fundamentals_outlook",
+    "bull_implied_stance",
+    "bear_implied_stance",
+    "risk_aggressive_posture",
+    "risk_conservative_posture",
+    "risk_neutral_posture",
+    "investment_recommendation",
+    "trader_decision",
+    "risk_decision",
+)
+
 # Per-day book + running backtest stats (updated on each successful day; cleared on error rows).
 SCHEDULE_ANALYSIS_FIELDNAMES = (
     "fees_day",
@@ -29,7 +45,7 @@ SCHEDULE_ANALYSIS_FIELDNAMES = (
     "total_transaction_costs",
     "cost_bps",
     "processed_signal",
-)
+) + SCHEDULE_STRUCTURED_LITERAL_FIELDNAMES
 
 SCHEDULE_FIELDNAMES = SCHEDULE_CORE_FIELDNAMES + SCHEDULE_ANALYSIS_FIELDNAMES
 

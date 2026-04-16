@@ -29,6 +29,7 @@ from tradingagents.backtest.dates_schedule import (
     SCHEDULE_ANALYSIS_FIELDNAMES,
     empty_schedule_analysis_values,
 )
+from tradingagents.backtest.structured_literals import extract_structured_schedule_literals
 from tradingagents.backtest.ledger import PaperLedger
 from tradingagents.backtest.prices import fetch_close_for_trade_date
 from tradingagents.backtest.signals import resolve_signal
@@ -172,10 +173,13 @@ def build_schedule_analysis_row(
     initial_cash: float,
     equity_rows: List[Dict[str, Any]],
     ledger: PaperLedger,
+    *,
+    structured_literals: Optional[Dict[str, str]] = None,
 ) -> Dict[str, str]:
     """String values for ``SCHEDULE_ANALYSIS_FIELDNAMES`` after the latest ``equity_rows`` row."""
+    row = empty_schedule_analysis_values()
     if not equity_rows:
-        return empty_schedule_analysis_values()
+        return row
     perf = compute_running_perf_numbers(initial_cash, equity_rows, ledger)
     last = equity_rows[-1]
     fees_day = last.get("fees_day", 0.0)
@@ -185,24 +189,29 @@ def build_schedule_analysis_row(
         ps = str(ps)
     ps = (ps or "")[:4000]
 
-    row: Dict[str, str] = {
-        "fees_day": _fmt_schedule_float(float(fees_day) if fees_day is not None else 0.0),
-        "cumulative_fees": _fmt_schedule_float(
-            float(cum_fees) if cum_fees is not None else perf["total_transaction_costs"]
-        ),
-        "total_return": _fmt_schedule_float(float(perf["total_return"])),
-        "annualized_return": _fmt_schedule_float(
-            float(perf["annualized_return"]) if perf["annualized_return"] is not None else None
-        ),
-        "sharpe_ratio": _fmt_schedule_float(
-            float(perf["sharpe_ratio"]) if perf["sharpe_ratio"] is not None else None
-        ),
-        "max_drawdown": _fmt_schedule_float(float(perf["max_drawdown"])),
-        "total_transaction_costs": _fmt_schedule_float(float(perf["total_transaction_costs"])),
-        "cost_bps": _fmt_schedule_float(float(perf["cost_bps"])),
-        "processed_signal": ps,
-    }
-    # Ensure every declared column exists
+    row.update(
+        {
+            "fees_day": _fmt_schedule_float(float(fees_day) if fees_day is not None else 0.0),
+            "cumulative_fees": _fmt_schedule_float(
+                float(cum_fees) if cum_fees is not None else perf["total_transaction_costs"]
+            ),
+            "total_return": _fmt_schedule_float(float(perf["total_return"])),
+            "annualized_return": _fmt_schedule_float(
+                float(perf["annualized_return"]) if perf["annualized_return"] is not None else None
+            ),
+            "sharpe_ratio": _fmt_schedule_float(
+                float(perf["sharpe_ratio"]) if perf["sharpe_ratio"] is not None else None
+            ),
+            "max_drawdown": _fmt_schedule_float(float(perf["max_drawdown"])),
+            "total_transaction_costs": _fmt_schedule_float(float(perf["total_transaction_costs"])),
+            "cost_bps": _fmt_schedule_float(float(perf["cost_bps"])),
+            "processed_signal": ps,
+        }
+    )
+    if structured_literals:
+        for k, v in structured_literals.items():
+            if k in row:
+                row[k] = (v or "")[:256]
     for k in SCHEDULE_ANALYSIS_FIELDNAMES:
         row.setdefault(k, "")
     return row
@@ -486,6 +495,7 @@ def run_backtest_mvp(
             d = str(d).strip()
             try:
                 final_state, processed = _propagate_one_day(d, day_index)
+                structured_lit = extract_structured_schedule_literals(final_state)
 
                 full_text = final_state.get("final_trade_decision") or ""
 
@@ -524,7 +534,10 @@ def run_backtest_mvp(
                             None,
                             None,
                             build_schedule_analysis_row(
-                                initial_cash, equity_rows, ledger
+                                initial_cash,
+                                equity_rows,
+                                ledger,
+                                structured_literals=structured_lit,
                             ),
                         )
                     _write_snapshot(complete=False, last_completed=d)
@@ -565,7 +578,10 @@ def run_backtest_mvp(
                         float(ledger.cash),
                         float(ledger.shares),
                         build_schedule_analysis_row(
-                            initial_cash, equity_rows, ledger
+                            initial_cash,
+                            equity_rows,
+                            ledger,
+                            structured_literals=structured_lit,
                         ),
                     )
                 _write_snapshot(complete=False, last_completed=d)

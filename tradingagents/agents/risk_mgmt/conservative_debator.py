@@ -1,9 +1,14 @@
-from langchain_core.messages import AIMessage
 import time
 import json
 
+from tradingagents.backtest.structured_literals import model_dump_json_with_recovery
+from tradingagents.llm_clients.invoke_fallback import (
+    invoke_structured_prompt_or_plain,
+)
+from tradingagents.schemas import RiskAnalystArgument
 
-def create_conservative_debator(llm):
+
+def create_conservative_debator(llm, fallback_llm=None):
     def conservative_node(state) -> dict:
         risk_debate_state = state["risk_debate_state"]
         history = risk_debate_state.get("history", "")
@@ -33,9 +38,19 @@ Here is the current conversation history: {history} Here is the last response fr
 
 Engage by questioning their optimism and emphasizing the potential downsides they may have overlooked. Address each of their counterpoints to showcase why a conservative stance is ultimately the safest path for the firm's assets. Focus on debating and critiquing their arguments to demonstrate the strength of a low-risk strategy over their approaches. Output conversationally as if you are speaking without any special formatting."""
 
-        response = llm.invoke(prompt)
+        structured, plain_fallback = invoke_structured_prompt_or_plain(
+            llm,
+            prompt,
+            RiskAnalystArgument,
+            build_from_text=lambda t: RiskAnalystArgument(
+                analysis=(t.strip() or "(structured output unavailable)"),
+                risk_posture="moderate",
+            ),
+            fallback_llm=fallback_llm,
+            context="Conservative risk",
+        )
 
-        argument = f"Conservative Analyst: {response.content}"
+        argument = f"Conservative Analyst: {structured.analysis}"
 
         new_risk_debate_state = {
             "history": history + "\n" + argument,
@@ -51,7 +66,12 @@ Engage by questioning their optimism and emphasizing the potential downsides the
                 "current_neutral_response", ""
             ),
             "count": risk_debate_state["count"] + 1,
+            "judge_decision": risk_debate_state.get("judge_decision", ""),
+            "conservative_structured": model_dump_json_with_recovery(structured, plain_fallback),
         }
+        for k in ("aggressive_structured", "neutral_structured"):
+            if k in risk_debate_state:
+                new_risk_debate_state[k] = risk_debate_state[k]
 
         return {"risk_debate_state": new_risk_debate_state}
 

@@ -30,28 +30,85 @@ _log = logging.getLogger(__name__)
 _LAST_HTTP_RESPONSE: ContextVar[dict[str, Any] | None] = ContextVar(
     "_LAST_HTTP_RESPONSE", default=None
 )
+_LAST_HTTP_REQUEST: ContextVar[dict[str, Any] | None] = ContextVar(
+    "_LAST_HTTP_REQUEST", default=None
+)
+
+
+def _http_log_max_chars() -> int:
+    """Max chars for logged HTTP bodies (request/response). Env: ``LLM_HTTP_LOG_MAX_CHARS``."""
+    try:
+        return max(512, min(int(os.getenv("LLM_HTTP_LOG_MAX_CHARS", "32000")), 2_000_000))
+    except ValueError:
+        return 32000
+
+
+def _truncate_http_text(text: str, *, limit: int | None = None) -> str:
+    lim = limit if limit is not None else _http_log_max_chars()
+    if len(text) <= lim:
+        return text
+    return text[:lim] + "\n…<truncated>…"
+
+
+def _redact_headers_for_log(headers: Any) -> dict[str, str]:
+    """Copy headers for logs; mask Authorization / API keys."""
+    out: dict[str, str] = {}
+    if not isinstance(headers, dict):
+        try:
+            headers = dict(headers)
+        except Exception:
+            return out
+    for k, v in headers.items():
+        lk = str(k).lower()
+        if lk in ("authorization", "api-key", "x-api-key"):
+            out[str(k)] = "<redacted>"
+        else:
+            out[str(k)] = str(v)
+    return out
+
+
+def _capture_http_request(request: httpx.Request) -> None:
+    """Store last outgoing request for debug/curl reproduction (OpenRouter default client)."""
+    try:
+        raw = request.content
+        body = raw.decode("utf-8", errors="replace")
+    except Exception:
+        body = "<unavailable>"
+    body = _truncate_http_text(body)
+    _LAST_HTTP_REQUEST.set(
+        {
+            "method": request.method,
+            "url": str(request.url),
+            "headers": _redact_headers_for_log(request.headers),
+            "body": body,
+        }
+    )
 
 
 def _capture_http_response(resp: httpx.Response) -> None:
     try:
         body = resp.text
     except Exception:
-        body = "<unavailable>"
-    # Keep logs bounded; responses can be huge.
-    if isinstance(body, str) and len(body) > 4000:
-        body = body[:4000] + "\n…<truncated>…"
+        try:
+            body = resp.content.decode("utf-8", errors="replace")
+        except Exception:
+            body = "<unavailable>"
+    body = _truncate_http_text(body)
     _LAST_HTTP_RESPONSE.set(
         {
             "status_code": resp.status_code,
             "url": str(resp.url),
-            "headers": dict(resp.headers),
+            "headers": _redact_headers_for_log(resp.headers),
             "body": body,
         }
     )
 
 
 def _build_http_clients_with_capture() -> tuple[httpx.Client, httpx.AsyncClient]:
-    hooks = {"response": [_capture_http_response]}
+    hooks = {
+        "request": [_capture_http_request],
+        "response": [_capture_http_response],
+    }
     return (
         httpx.Client(event_hooks=hooks),
         httpx.AsyncClient(event_hooks=hooks),
@@ -62,6 +119,35 @@ def _should_capture_raw_response() -> bool:
     # Default on; can be disabled via env for noise/perf.
     v = os.getenv("LLM_CAPTURE_RAW_RESPONSE", "1").strip().lower()
     return v not in ("0", "false", "no", "off")
+
+
+def _log_llm_http_debug_pair(reason: str) -> None:
+    """Log last captured request/response (httpx hooks) plus a curl template for OpenRouter."""
+    req = _LAST_HTTP_REQUEST.get()
+    resp = _LAST_HTTP_RESPONSE.get()
+    if req is not None:
+        _log.warning("%s: last HTTP request (headers redacted): %s", reason, req)
+        url = req.get("url", "")
+        _log.warning(
+            "%s: copy the request `body` JSON to a file, then e.g.\n"
+            "  curl -sS %s -H 'Content-Type: application/json' "
+            '-H "Authorization: Bearer $OPENROUTER_API_KEY" -d @/tmp/openrouter_body.json',
+            reason,
+            json.dumps(url),
+        )
+    else:
+        _log.warning(
+            "%s: no HTTP request captured (use OpenRouter default http_client or request hook).",
+            reason,
+        )
+    if resp is not None:
+        _log.warning("%s: last HTTP response: %s", reason, resp)
+    else:
+        _log.warning(
+            "%s: no HTTP response captured (streaming/consumed body may show body=<unavailable>; "
+            "raise LLM_HTTP_LOG_MAX_CHARS if needed).",
+            reason,
+        )
 
 
 def _provider_error_max_attempts() -> int:
@@ -207,15 +293,15 @@ class UnifiedChatOpenAI(ChatOpenAI):
                 if attempt == attempts - 1:
                     raise
                 delay = _backoff_seconds(attempt)
-                raw = _LAST_HTTP_RESPONSE.get()
                 _log.warning(
-                    "LLM response JSON decode error (attempt %s/%s), retrying in %.2fs: %s raw=%s",
+                    "LLM response JSON decode error (attempt %s/%s), retrying in %.2fs: %s",
                     attempt + 1,
                     attempts,
                     delay,
                     e,
-                    raw,
+                    exc_info=True,
                 )
+                _log_llm_http_debug_pair("LLM JSON decode")
                 time.sleep(delay)
             except ValueError as e:
                 last = e
@@ -243,6 +329,14 @@ class UnifiedChatOpenAI(ChatOpenAI):
                     e,
                 )
                 time.sleep(delay)
+            except TypeError as e:
+                # Often: openai.lib._parsing when chat_completion.choices is None (OpenRouter + parse API).
+                _log.warning(
+                    "LLM TypeError (often beta.chat.completions.parse + choices=None).",
+                    exc_info=True,
+                )
+                _log_llm_http_debug_pair("LLM TypeError")
+                raise
         assert last is not None
         raise last
 
@@ -267,15 +361,15 @@ class UnifiedChatOpenAI(ChatOpenAI):
                 if attempt == attempts - 1:
                     raise
                 delay = _backoff_seconds(attempt)
-                raw = _LAST_HTTP_RESPONSE.get()
                 _log.warning(
-                    "LLM response JSON decode error (attempt %s/%s), retrying in %.2fs: %s raw=%s",
+                    "LLM response JSON decode error (attempt %s/%s), retrying in %.2fs: %s",
                     attempt + 1,
                     attempts,
                     delay,
                     e,
-                    raw,
+                    exc_info=True,
                 )
+                _log_llm_http_debug_pair("LLM JSON decode")
                 await asyncio.sleep(delay)
             except ValueError as e:
                 last = e
@@ -303,6 +397,13 @@ class UnifiedChatOpenAI(ChatOpenAI):
                     e,
                 )
                 await asyncio.sleep(delay)
+            except TypeError as e:
+                _log.warning(
+                    "LLM TypeError (often beta.chat.completions.parse + choices=None).",
+                    exc_info=True,
+                )
+                _log_llm_http_debug_pair("LLM TypeError")
+                raise
         assert last is not None
         raise last
 

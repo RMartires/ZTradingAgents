@@ -7,6 +7,7 @@ from tradingagents.agents.utils.agent_utils import (
     limit_messages_for_llm_context,
 )
 from tradingagents.dataflows.config import get_config
+from tradingagents.agents.utils.analyst_structured import analyst_report_json_for_state
 
 
 def create_news_analyst(llm):
@@ -55,9 +56,12 @@ def create_news_analyst(llm):
         if len(result.tool_calls) == 0:
             report = result.content
 
-        return {
+        out = {
             "messages": [result],
             "news_report": report,
         }
+        if report.strip():
+            out["news_report_structured"] = analyst_report_json_for_state(llm, report)
+        return out
 
     return news_analyst_node

@@ -1,8 +1,14 @@
 import time
 import json
 
+from tradingagents.backtest.structured_literals import model_dump_json_with_recovery
+from tradingagents.llm_clients.invoke_fallback import (
+    invoke_structured_prompt_or_plain,
+)
+from tradingagents.schemas import RiskAnalystArgument
 
-def create_aggressive_debator(llm):
+
+def create_aggressive_debator(llm, fallback_llm=None):
     def aggressive_node(state) -> dict:
         risk_debate_state = state["risk_debate_state"]
         history = risk_debate_state.get("history", "")
@@ -32,9 +38,19 @@ Here is the current conversation history: {history} Here are the last arguments 
 
 Engage actively by addressing any specific concerns raised, refuting the weaknesses in their logic, and asserting the benefits of risk-taking to outpace market norms. Maintain a focus on debating and persuading, not just presenting data. Challenge each counterpoint to underscore why a high-risk approach is optimal. Output conversationally as if you are speaking without any special formatting."""
 
-        response = llm.invoke(prompt)
+        structured, plain_fallback = invoke_structured_prompt_or_plain(
+            llm,
+            prompt,
+            RiskAnalystArgument,
+            build_from_text=lambda t: RiskAnalystArgument(
+                analysis=(t.strip() or "(structured output unavailable)"),
+                risk_posture="moderate",
+            ),
+            fallback_llm=fallback_llm,
+            context="Aggressive risk",
+        )
 
-        argument = f"Aggressive Analyst: {response.content}"
+        argument = f"Aggressive Analyst: {structured.analysis}"
 
         new_risk_debate_state = {
             "history": history + "\n" + argument,
@@ -48,7 +64,12 @@ Engage actively by addressing any specific concerns raised, refuting the weaknes
                 "current_neutral_response", ""
             ),
             "count": risk_debate_state["count"] + 1,
+            "judge_decision": risk_debate_state.get("judge_decision", ""),
+            "aggressive_structured": model_dump_json_with_recovery(structured, plain_fallback),
         }
+        for k in ("conservative_structured", "neutral_structured"):
+            if k in risk_debate_state:
+                new_risk_debate_state[k] = risk_debate_state[k]
 
         return {"risk_debate_state": new_risk_debate_state}
 

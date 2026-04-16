@@ -61,12 +61,14 @@ if os.getenv("LLM_MAX_TOKENS", "").strip():
     config["llm_max_tokens"] = int(os.getenv("LLM_MAX_TOKENS", "8192"))
 if os.getenv("LLM_MAX_INPUT_TOKENS", "").strip():
     config["llm_max_input_tokens"] = int(os.getenv("LLM_MAX_INPUT_TOKENS", "0"))
+# Optional: sampling temperature only for schemas.outputs structured JSON invokes
+# (see tradingagents.llm_clients.invoke_fallback.bound_llm_for_structured_output). Not loaded into config.
 
 # Configure data vendors (default uses yfinance, no extra API keys needed)
 config["data_vendors"] = {
-    "core_stock_apis": "alpha_vantage",
-    "technical_indicators": "alpha_vantage",
-    "fundamental_data": "alpha_vantage",
+    "core_stock_apis": "kite",
+    "technical_indicators": "kite",
+    "fundamental_data": "yfinance",
     "news_data": "alpha_vantage",
 }
 
@@ -79,8 +81,8 @@ root_span = None
 trace_cm = None
 propagate_cm = None
 
-TICKER = "NVDA"
-TRADE_DATE = "2024-05-22"
+TICKER = "RELIANCE"
+TRADE_DATE = "2024-04-05"
 
 if langfuse_client is not None:
     from langfuse import propagate_attributes

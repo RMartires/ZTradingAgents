@@ -87,22 +87,30 @@ class GraphSetup:
 
         # Create researcher and manager nodes
         bull_researcher_node = create_bull_researcher(
-            self.quick_thinking_llm, self.bull_memory
+            self.quick_thinking_llm, self.bull_memory, self.deep_thinking_llm
         )
         bear_researcher_node = create_bear_researcher(
-            self.quick_thinking_llm, self.bear_memory
+            self.quick_thinking_llm, self.bear_memory, self.deep_thinking_llm
         )
         research_manager_node = create_research_manager(
             self.deep_thinking_llm,
             self.invest_judge_memory,
             self.quick_thinking_llm,
         )
-        trader_node = create_trader(self.quick_thinking_llm, self.trader_memory)
+        trader_node = create_trader(
+            self.quick_thinking_llm, self.trader_memory, self.deep_thinking_llm
+        )
 
         # Create risk analysis nodes
-        aggressive_analyst = create_aggressive_debator(self.quick_thinking_llm)
-        neutral_analyst = create_neutral_debator(self.quick_thinking_llm)
-        conservative_analyst = create_conservative_debator(self.quick_thinking_llm)
+        aggressive_analyst = create_aggressive_debator(
+            self.quick_thinking_llm, self.deep_thinking_llm
+        )
+        neutral_analyst = create_neutral_debator(
+            self.quick_thinking_llm, self.deep_thinking_llm
+        )
+        conservative_analyst = create_conservative_debator(
+            self.quick_thinking_llm, self.deep_thinking_llm
+        )
         risk_manager_node = create_risk_manager(
             self.deep_thinking_llm,
             self.risk_manager_memory,

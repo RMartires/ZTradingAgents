@@ -49,19 +49,29 @@ def resolve_signal(
     signal_processor: Optional[Any] = None,
 ) -> str:
     """
-    Resolve a canonical BUY/SELL/HOLD.
+    Resolve a canonical BUY/SELL/HOLD for execution and schedule ``final_signal``.
 
-    Order: heuristic on ``full_text``, then ``processed`` from the graph,
-    then optional ``SignalProcessor.process_signal`` when ``use_llm`` is True.
+    Order (intentional):
+
+    1. **``processed``** — output of ``TradingAgentsGraph.process_signal`` (quick LLM
+       extraction from ``final_trade_decision``). Prefer this first so the traded signal
+       matches the ``processed_signal`` column and avoids spurious BUY/SELL tokens in debate
+       text winning over the dedicated extractor.
+
+    2. **Heuristic** on ``full_text`` — regex / last-token fallback when ``processed`` is
+       empty or not canonical.
+
+    3. Optional **second LLM** pass via ``SignalProcessor.process_signal`` when
+       ``use_llm`` is True (backtest ``--use-llm-signal``).
     """
+    if processed:
+        c = _canonical_from_processed(processed)
+        if c in ("BUY", "SELL", "HOLD"):
+            return c
+
     h = normalize_signal_heuristic(full_text)
     if h in ("BUY", "SELL", "HOLD"):
         return h
-
-    if processed:
-        c = _canonical_from_processed(processed)
-        if c:
-            return c
 
     if use_llm and signal_processor is not None:
         try:
